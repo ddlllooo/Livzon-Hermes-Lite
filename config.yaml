@@ -1,0 +1,49 @@
+# ═══════════════════════════════════════════════════════════════
+# Hermes-Lite — Configuration
+# ═══════════════════════════════════════════════════════════════
+# This file is self-contained. All paths resolve relative to
+# the project directory (HERMES_HOME is set to this folder).
+# API keys go in .env, NOT here.
+# ═══════════════════════════════════════════════════════════════
+
+model:
+  default: mimo-v2.5-pro
+  provider: xiaomi
+
+custom_providers:
+  - name: xiaomi
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
+    api_mode: chat_completions
+    models:
+      mimo-v2.5-pro:
+        name: MiMo v2.5 Pro
+    model: mimo-v2.5-pro
+    # api_key resolved from .env → XIAOMI_API_KEY
+
+  - name: ds
+    base_url: https://api.deepseek.com
+    api_mode: chat_completions
+    models:
+      deepseek-v4-pro:
+        context_length: 1000000
+        name: DeepSeek V4 Pro
+      deepseek-v4-flash:
+        context_length: 1000000
+        name: DeepSeek V4 Flash
+    model: deepseek-v4-pro
+    # api_key resolved from .env → DEEPSEEK_API_KEY
+
+# ── 记忆系统 ─────────────────────────────────
+memory:
+  memory_enabled: true        # 启用 MEMORY.md 引擎级记忆（内部，用户不可见）
+  user_profile_enabled: true  # 启用 per-user 用户画像（前端可见）
+  memory_char_limit: 2200     # MEMORY.md 字符上限（严格控制，防止泄露面过大）
+  user_char_limit: 1375       # USER.md 字符上限（前端展示，适度限制）
+  nudge_interval: 0           # 禁用 memory nudge（Hermes-Lite 是 Web 产品，不向用户暴露 self-improvement 提示）
+
+skills:
+  creation_nudge_interval: 0  # 禁用 skill nudge（Hermes-Lite 用户无需 skill 管理提示）
+
+# Web search backend
+web:
+  backend: tavily

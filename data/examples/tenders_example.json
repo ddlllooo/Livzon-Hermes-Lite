@@ -1,0 +1,86 @@
+[
+  {
+    "tender_id": "ZB-2026-001",
+    "project_code": "XXZB-2026-0612-001",
+    "title": "某市政府智慧城市大数据平台建设项目",
+    "buyer": "某市大数据管理局",
+    "agency": "某招标代理有限公司",
+    "industry": "IT",
+    "region": "北京",
+    "tender_type": "公开招标",
+    "project_type": "服务",
+    "budget_min": 800,
+    "budget_max": 1200,
+    "publish_date": "2026-06-01",
+    "deadline": "2026-07-15",
+    "open_date": "2026-07-16",
+    "requirements": {
+      "platform": "大数据平台",
+      "tech_stack": ["Hadoop", "Spark", "Flink", "数据治理"],
+      "delivery": "12个月",
+      "team": "项目经理+10人以上团队"
+    },
+    "eval_criteria": {
+      "tech_score": 40,
+      "price_score": 30,
+      "experience_score": 20,
+      "service_score": 10
+    },
+    "qualifications": ["信息系统集成及服务资质一级", "CMMI3以上"],
+    "content": "为推进新型智慧城市建设，现需建设市级大数据平台，包括数据采集、数据治理、数据分析、数据开放等功能模块...",
+    "status": "active",
+    "source_url": "https://example.com/tender/001"
+  },
+  {
+    "tender_id": "ZB-2026-002",
+    "project_code": "YLZB-2026-0610-002",
+    "title": "三甲医院信息化系统升级改造项目",
+    "buyer": "某省人民医院",
+    "agency": "某医疗招标代理公司",
+    "industry": "医疗",
+    "region": "广东",
+    "tender_type": "公开招标",
+    "project_type": "货物",
+    "budget_min": 500,
+    "budget_max": 800,
+    "publish_date": "2026-06-05",
+    "deadline": "2026-07-20",
+    "open_date": "2026-07-21",
+    "requirements": {
+      "system": ["HIS升级", "电子病历", "PACS系统"],
+      "integration": "与现有系统无缝对接",
+      "security": "等保三级"
+    },
+    "eval_criteria": {
+      "tech_score": 45,
+      "price_score": 25,
+      "experience_score": 20,
+      "service_score": 10
+    },
+    "qualifications": ["医疗器械经营许可证", "软件企业认证"],
+    "content": "为提升医院信息化水平，现对HIS、电子病历、PACS等核心系统进行升级改造...",
+    "status": "active",
+    "source_url": "https://example.com/tender/002"
+  },
+  {
+    "tender_id": "ZB-2026-003",
+    "project_code": "JZZB-2026-0608-003",
+    "title": "产业园区智慧园区综合管理平台建设",
+    "buyer": "某经济技术开发区管委会",
+    "industry": "IT",
+    "region": "上海",
+    "tender_type": "竞争性谈判",
+    "project_type": "服务",
+    "budget_min": 300,
+    "budget_max": 500,
+    "publish_date": "2026-06-08",
+    "deadline": "2026-06-30",
+    "requirements": {
+      "modules": ["物业管理", "能耗监控", "安防监控", "访客管理"],
+      "iot": "支持IoT设备接入"
+    },
+    "qualifications": ["信息系统集成及服务资质二级以上"],
+    "content": "建设智慧园区综合管理平台，实现园区物业管理、能耗监控、安防监控等一体化管理...",
+    "status": "active"
+  }
+]

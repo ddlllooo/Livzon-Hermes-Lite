@@ -1,0 +1,12 @@
+# Hermes-Lite - Development Dependencies
+# Install with: pip install -r requirements-dev.txt -r requirements.txt
+
+# Include base requirements
+-r requirements.txt
+
+# === Testing ===
+pytest==9.0.2
+pytest-asyncio==1.3.0
+
+# === Linting ===
+ruff==0.15.10
