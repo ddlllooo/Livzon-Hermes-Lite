@@ -14,7 +14,7 @@ registry from Hermes Agent while removing high-risk local automation from
 the default toolset.
 
 This repository is intended as a small, web-safe agent core that can be embedded
-or extended without database-backedRAG, browser automation, terminal execution, 
+or extended without carrying database-backedRAG, browser automation, terminal execution, 
 or media-generation features by default.
 
 ### Included
