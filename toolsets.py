@@ -26,18 +26,19 @@ Usage:
 from typing import List, Dict, Any, Set, Optional
 
 
-# LeadFlow Agent Core - 企业级 Web 应用工具集
-# 仅保留用户交互和业务相关的工具，移除文件/终端等本地操作工具
+# Hermes-Lite - lightweight web-safe toolsets
+# Keep only conversational/research tools by default; local file/terminal
+# execution and business-specific tools are intentionally excluded.
 _HERMES_CORE_TOOLS = [
-    # Web research (公开数据补充)
+    # Web research
     "web_search", "web_extract",
-    # Memory (用户偏好、公司信息)
+    # Memory
     "memory",
-    # Session history search (对话历史)
+    # Session history search
     "session_search",
-    # Planning (任务跟踪)
+    # Planning
     "todo",
-    # Clarifying questions (意图澄清)
+    # Clarifying questions
     "clarify",
 ]
 
@@ -48,7 +49,7 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
     "clarify",
 ]
 
-# LeadFlow 工具集定义
+# Hermes-Lite toolset definitions
 TOOLSETS = {
     "web": {
         "description": "Web research and content extraction tools",
@@ -85,19 +86,9 @@ TOOLSETS = {
         "tools": ["skill_manage"],
         "includes": []
     },
-    "knowledge": {
-        "description": "Enterprise knowledge base retrieval (OceanBase Vector + BM25 + Rerank)",
-        "tools": ["knowledge_search"],
-        "includes": []
-    },
-    "tender": {
-        "description": "Tender matching and recommendation (search/match/recommend/analyze)",
-        "tools": ["tender_search", "tender_recommend", "tender_match", "tender_analyze"],
-        "includes": []
-    },
     "agent": {
-        "description": "Core agent tools for LeadFlow",
-        "tools": ["memory", "session_search", "todo", "clarify", "web_search", "web_extract", "knowledge_search", "tender_search", "tender_recommend", "tender_match", "tender_analyze"],
+        "description": "Default lightweight Hermes-Lite toolset",
+        "tools": ["memory", "session_search", "todo", "clarify", "web_search", "web_extract"],
         "includes": []
     },
 }
@@ -197,7 +188,7 @@ def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
         if name.startswith("hermes-"):
             platform_name = name[len("hermes-"):]
             try:
-                # gateway platform_registry removed in LeadFlow
+                # gateway platform_registry removed in Hermes-Lite
                 if platform_registry.is_registered(platform_name):
                     plugin_tools = set(_HERMES_CORE_TOOLS)
                     try:

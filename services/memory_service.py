@@ -1,7 +1,7 @@
 """
 Per-User Memory Service — 用户画像隔离
 
-LeadFlow 是多用户 Web 应用，不同账号需要独立的用户画像（USER.md）。
+Hermes-Lite can optionally isolate USER.md profiles by platform user id.
 此模块提供：
   - 按 user_id 隔离 USER.md 路径
   - 默认用户画像模板
@@ -144,13 +144,15 @@ def create_memory_store_for_user(
 # ── 默认用户画像模板 ────────────────────────────────────────────
 
 DEFAULT_USER_PROFILE_TEMPLATE = """§
-我是新注册的 LeadFlow 用户，请通过对话了解我的信息并更新此画像。
+我是新注册的 Hermes-Lite 用户，请通过对话了解我的信息并更新此画像。
 §
-关注行业：（未设置 — 请告知您所在的行业或关注的领域）
+关注领域：（未设置）
 §
-关注地区：（未设置 — 请告知您关注的地域范围）
+工作环境：（未设置）
 §
-用户角色：（未设置 — 如：企业管理者 / 投标经理 / 市场分析师 / 采购负责人）
+用户角色：（未设置）
 §
-偏好输出格式：表格形式的结构化对比分析
+常用功能：（未设置）
+§
+偏好输出格式：（未设置）
 """
