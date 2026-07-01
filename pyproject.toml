@@ -24,6 +24,8 @@ dependencies = [
   # === HTTP ===
   "httpx[socks]==0.28.1",
   "requests==2.33.0",
+  "fastapi>=0.115.0,<1",
+  "uvicorn[standard]>=0.30.0,<1",
   
   # === Display & Logging ===
   "rich==14.3.3",

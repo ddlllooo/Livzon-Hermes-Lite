@@ -91,6 +91,11 @@ TOOLSETS = {
         "tools": ["memory", "session_search", "todo", "clarify", "web_search", "web_extract"],
         "includes": []
     },
+    "dazah": {
+        "description": "Dazah platform warehouse and procurement tools",
+        "tools": ["dazah_tool"],
+        "includes": []
+    },
 }
 
 def get_toolset(name: str) -> Optional[Dict[str, Any]]:

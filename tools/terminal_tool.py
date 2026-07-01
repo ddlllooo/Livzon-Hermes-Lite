@@ -13,6 +13,10 @@ def is_persistent_env(*a, **kw):
     return False
 
 
+def get_active_env(*a, **kw):
+    return None
+
+
 def _get_env_config(*a, **kw):
     return {}
 
@@ -43,6 +47,14 @@ def _get_approval_callback(*a, **kw):
 
 
 def set_approval_callback(*a, **kw):
+    pass
+
+
+def _get_sudo_password_callback(*a, **kw):
+    return None
+
+
+def set_sudo_password_callback(*a, **kw):
     pass
 
 

@@ -7,10 +7,20 @@
 # ═══════════════════════════════════════════════════════════════
 
 model:
-  default: mimo-v2.5-pro
-  provider: xiaomi
+  default: dazah-active-text
+  provider: dazah
 
 custom_providers:
+  - name: dazah
+    base_url: http://127.0.0.1:8000/api/v1/agent/llm
+    api_mode: chat_completions
+    models:
+      dazah-active-text:
+        name: Dazah active text model
+    model: dazah-active-text
+    # The FastAPI adapter passes AGENT_LLM_PROXY_TOKEN explicitly.
+    # CLI compatibility may use DAZAH_API_KEY with the same service token.
+
   - name: xiaomi
     base_url: https://token-plan-cn.xiaomimimo.com/v1
     api_mode: chat_completions

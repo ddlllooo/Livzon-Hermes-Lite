@@ -30,7 +30,9 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill the provider API key values in `.env`.
+For standalone development, fill the provider API key values in `.env`. For
+Dazah central-agent deployment, do not store real model-provider API keys in
+Hermes-Lite; use the Dazah LLM proxy token described below.
 
 ## Configuration
 
@@ -38,6 +40,78 @@ Fill the provider API key values in `.env`.
 - `.env` contains secrets and deployment-specific API keys.
 - Runtime state such as sessions, memories, and caches should stay local and is
   ignored by git.
+
+## Dazah Central Agent Adapter
+
+Dazah uses Hermes-Lite as an independent orchestration service behind the Dazah
+backend Agent gateway:
+
+```text
+Dazah frontend floating assistant
+        |
+        v
+Dazah backend /api/v1/agent/chat
+        |
+        v
+Hermes-Lite services.dazah_agent_service:/v1/chat
+        |
+        +-- LLM: Dazah /api/v1/agent/llm/chat/completions
+        +-- Tools: Dazah /api/v1/agent/tools/execute
+```
+
+Required Hermes-Lite `.env` values:
+
+```bash
+HERMES_AGENT_TOKEN=change-me
+AGENT_LLM_PROXY_TOKEN=change-me
+DAZAH_API_BASE_URL=http://127.0.0.1:8000/api/v1
+DAZAH_AGENT_TOOL_TOKEN=change-me
+DAZAH_LLM_BASE_URL=http://127.0.0.1:8000/api/v1/agent/llm
+DAZAH_LLM_MODEL=dazah-active-text
+```
+
+Run the adapter:
+
+```bash
+uvicorn services.dazah_agent_service:app --host 0.0.0.0 --port 8100
+```
+
+Run the adapter with Docker:
+
+```bash
+docker build -t hermes-lite:prod .
+docker run --rm -p 8100:8100 --env-file .env hermes-lite:prod
+```
+
+For local Dazah development, after the Dazah backend compose stack has created
+the `dazah-backend_default` network, run:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+The development compose file mounts the repository into `/app` and starts
+Uvicorn with `--reload`, so Python source edits are picked up automatically
+after the first image build. Rebuild only when dependencies, Dockerfile, or
+entrypoint files change.
+
+When running inside the Dazah production compose network, use service names
+instead of localhost:
+
+```bash
+DAZAH_API_BASE_URL=http://backend:8000/api/v1
+DAZAH_LLM_BASE_URL=http://backend:8000/api/v1/agent/llm
+```
+
+Security boundaries:
+
+- Hermes-Lite only stores service-to-service tokens, not model-provider keys.
+- The active text model is resolved by Dazah backend from the platform LLM
+  configuration table on every request.
+- The `dazah` toolset only calls the Dazah Agent tool gateway.
+- Warehouse/procurement operation whitelisting, write confirmations, business
+  permissions, audit records, Feishu credentials, and transaction execution stay
+  in the Dazah backend.
 
 ## Toolsets
 
@@ -50,6 +124,7 @@ Fill the provider API key values in `.env`.
 | `todo` | `todo` | Task planning |
 | `clarify` | `clarify` | Clarifying questions |
 | `skills` | `skill_manage` | Administrator/developer opt-in only |
+| `dazah` | `dazah_tool` | Dazah warehouse/procurement gateway only |
 
 ## Removed Business Extensions
 

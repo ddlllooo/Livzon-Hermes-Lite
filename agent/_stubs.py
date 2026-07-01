@@ -5,6 +5,9 @@ left over from the Hermes Agent → LeadFlow trim. Consolidated into one file
 to reduce file count while preserving import compatibility.
 """
 
+from dataclasses import dataclass
+from typing import Any
+
 
 def is_token_provider(*a, **kw):
     """Stub: azure_identity_adapter."""
@@ -156,14 +159,74 @@ def get_nous_rate_limit_info(*a, **kw):
     return None
 
 
+@dataclass(frozen=True)
+class UsageCostResult:
+    amount_usd: float | None = None
+    status: str = "unknown"
+    source: str = "stub"
+
+
+@dataclass(frozen=True)
+class CanonicalUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+
+
+def _usage_get(usage: Any, key: str, default: int = 0) -> int:
+    if usage is None:
+        return default
+    if isinstance(usage, dict):
+        value = usage.get(key, default)
+    else:
+        value = getattr(usage, key, default)
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def estimate_usage_cost(*a, **kw):
     """Stub: usage_pricing."""
-    return {}
+    return UsageCostResult()
 
 
 def normalize_usage(*a, **kw):
     """Stub: usage_pricing."""
-    return a[0] if a else {}
+    usage = a[0] if a else None
+    prompt_tokens = _usage_get(usage, "prompt_tokens") or _usage_get(usage, "input_tokens")
+    completion_tokens = _usage_get(usage, "completion_tokens") or _usage_get(usage, "output_tokens")
+    total_tokens = _usage_get(usage, "total_tokens") or (prompt_tokens + completion_tokens)
+
+    prompt_details = _usage_get(usage, "prompt_tokens_details", {})
+    completion_details = _usage_get(usage, "completion_tokens_details", {})
+    if not isinstance(prompt_details, dict) and hasattr(prompt_details, "model_dump"):
+        prompt_details = prompt_details.model_dump()
+    if not isinstance(completion_details, dict) and hasattr(completion_details, "model_dump"):
+        completion_details = completion_details.model_dump()
+
+    cache_read_tokens = 0
+    reasoning_tokens = 0
+    if isinstance(prompt_details, dict):
+        cache_read_tokens = _usage_get(prompt_details, "cached_tokens")
+    if isinstance(completion_details, dict):
+        reasoning_tokens = _usage_get(completion_details, "reasoning_tokens")
+
+    return CanonicalUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=0,
+        reasoning_tokens=reasoning_tokens,
+    )
 
 
 # ── Additional stubs (background review prompts) ──

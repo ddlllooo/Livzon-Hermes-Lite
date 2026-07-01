@@ -1,167 +1,501 @@
 # Hermes-Lite
 
-Language: [English](#english) | [简体中文](#简体中文)
+> Hermes-Lite 是基于 Hermes Agent v0.16.0 裁剪和适配后的轻量中枢 Agent。  
+> 在 Dazah / Livzon Agent 场景中，它负责理解用户意图、编排工具调用、连接平台 LLM 代理，并将业务结果组织成适合前端聊天窗口展示的回复。
 
-## English
+## 1. Hermes 的作用
 
-> Lightweight trimmed Hermes Agent core, based on Hermes Agent v0.16.0.
+Hermes-Lite 在当前平台中的定位不是业务系统本身，也不是直接访问数据库的数据服务，而是位于 Dazah 后端 Agent 网关之后的“智能编排层”。
 
-### Overview
+它主要承担以下职责：
 
-Hermes-Lite keeps the general agent runtime, model-provider plumbing, prompt
-assembly, memory support, session recall, web research tools, and the tool
-registry from Hermes Agent while removing high-risk local automation from 
-the default toolset.
+- 接收 Dazah 后端转发的用户消息、会话历史和用户上下文。
+- 通过 Dazah 后端提供的 LLM 代理调用平台当前启用的大模型配置。
+- 根据用户意图选择合适的工具，例如库存查询、采购申请、审批查询等。
+- 通过 `dazah_tool` 调用 Dazah 后端受控的业务工具网关。
+- 对读操作结果进行业务化总结和卡片式表达。
+- 对写操作生成待确认项，由前端展示二次确认，用户确认后再由 Dazah 后端执行。
+- 保持 Hermes 自身的工具边界，不直接绕过后端权限、审计和业务校验。
 
-This repository is intended as a small, web-safe agent core that can be embedded
-or extended without carrying database-backedRAG, browser automation, terminal execution, 
-or media-generation features by default.
-
-### Included
-
-- Tool-calling conversation loop
-- OpenAI-compatible provider support
-- Web search and page extraction tools
-- Persistent memory and per-user profile helpers
-- Session search, todo planning, and clarification tools
-- Skill management code retained for administrator/developer opt-in use
-- Tool registry with dangerous local tools blocked from auto-discovery
-
-### Default Toolset
-
-The default `agent` toolset exposes only these general-purpose tools:
-
-| Tool | Purpose |
-|------|---------|
-| `web_search` | Search public web sources |
-| `web_extract` | Extract web page content |
-| `memory` | Store durable user/project preferences |
-| `session_search` | Recall prior sessions |
-| `todo` | Track task steps |
-| `clarify` | Ask concise clarification questions |
-
-The `skills` toolset containing `skill_manage` remains available only when
-explicitly enabled by an administrator or developer.
-
-
-### Project Layout
+当前调用链路如下：
 
 ```text
-Hermes-Lite/
-├── agent/              # Core agent runtime
-├── tools/              # Tool registry and retained general tools
-├── hermes_cli/         # Lightweight config/auth compatibility helpers
-├── providers/          # Provider extension interfaces
-├── plugins/            # Minimal plugin namespace packages
-├── services/           # Small retained service helpers
-├── scripts/            # Utility scripts
-├── toolsets.py         # Default toolset definitions
-├── model_tools.py      # Tool schema loading and dispatch glue
-├── run_agent.py        # Main agent entrypoint
-└── config.yaml         # Local default configuration
+Livzon Agent 前端悬浮助手
+        |
+        v
+Dazah 后端 /api/v1/agent/chat 或 /api/v1/agent/chat/stream
+        |
+        v
+Hermes-Lite /v1/chat 或 /v1/chat/stream
+        |
+        +-- LLM：Dazah 后端 /api/v1/agent/llm/chat/completions
+        |
+        +-- 工具：dazah_tool
+              |
+              v
+           Dazah 后端 /api/v1/agent/tools/execute
+              |
+              v
+           仓储 / 采购 / 审批 / 飞书同步等业务模块
 ```
 
-### Quick Start
+## 2. 与 Dazah 平台的适配方式
+
+### 2.1 LLM 配置读取
+
+Hermes-Lite 不直接保存真实模型 API Key，也不直接读取数据库中的 LLM 配置。
+
+当前设计是：
+
+- 平台管理员在 Dazah 中维护“LLM 系统配置”。
+- Dazah 后端从平台配置表中读取当前启用的模型供应商、模型名称、Base URL、API Key 等信息。
+- Hermes-Lite 只访问 Dazah 后端暴露的 LLM 代理接口。
+- Hermes-Lite 与 Dazah 后端之间通过 `AGENT_LLM_PROXY_TOKEN` 做服务间鉴权。
+
+这可以保证：
+
+- 模型密钥集中保存在 Dazah 平台侧。
+- Hermes 不需要感知具体供应商密钥。
+- 切换模型配置时优先由平台配置生效，不需要频繁修改 Hermes。
+- 后端可以统一做模型访问审计、错误处理和配置校验。
+
+相关环境变量：
+
+```bash
+AGENT_LLM_PROXY_TOKEN=change-me
+DAZAH_LLM_BASE_URL=http://app:8000/api/v1/agent/llm
+DAZAH_LLM_MODEL=dazah-active-text
+```
+
+容器内运行时不要使用 `127.0.0.1` 指向 Dazah 后端。`127.0.0.1` 在容器内代表 Hermes 容器自身，应使用 Docker 网络中的服务名，例如：
+
+```bash
+DAZAH_LLM_BASE_URL=http://app:8000/api/v1/agent/llm
+```
+
+### 2.2 平台工具调用
+
+Hermes-Lite 通过 `tools/dazah_platform.py` 中的 `dazah_tool` 调用 Dazah 平台业务能力。
+
+`dazah_tool` 不允许模型调用任意 URL，只允许向 Dazah 后端工具网关发送白名单操作：
+
+```text
+POST {DAZAH_API_BASE_URL}/agent/tools/execute
+```
+
+相关环境变量：
+
+```bash
+DAZAH_API_BASE_URL=http://app:8000/api/v1
+DAZAH_AGENT_TOOL_TOKEN=change-me
+```
+
+所有业务权限、参数校验、写操作确认、审计记录、数据库事务和飞书凭证都保留在 Dazah 后端，Hermes 只负责发起受控工具调用。
+
+### 2.3 聊天接口
+
+Hermes-Lite 为 Dazah Agent 网关提供两个接口：
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /health` | 健康检查 |
+| `POST /v1/chat` | 普通非流式对话 |
+| `POST /v1/chat/stream` | SSE 流式对话 |
+
+`/v1/chat/stream` 用于 Livzon Agent 前端逐字输出回复内容。Dazah 前端可通过后端代理接口消费 SSE，用户点击“停止”时由前端中断当前流式请求。
+
+## 3. 兼容性说明
+
+Hermes-Lite 保留 Hermes Agent 的核心运行能力，但对默认功能面做了收敛，以便更安全地嵌入业务系统。
+
+### 3.1 保留能力
+
+- Tool-calling 对话循环。
+- OpenAI-compatible Chat Completions 调用方式。
+- Prompt 组装和会话历史注入。
+- Memory、session search、todo、clarify 等轻量 Agent 工具。
+- Web search 与 web extract。
+- Tool registry 和 toolset 机制。
+- Dazah 平台工具集 `dazah`。
+- 普通响应和 SSE 流式响应。
+
+### 3.2 默认不启用的能力
+
+以下能力虽然在工程中可能存在兼容代码或历史模块，但当前 Dazah Agent 服务默认不启用：
+
+- 终端命令执行。
+- 本地文件读写。
+- 浏览器自动化。
+- 代码执行。
+- 多媒体生成。
+- 未经 Dazah 后端网关授权的数据库直连。
+- 任意第三方 URL 工具调用。
+
+这样做的目的是降低业务系统内嵌 Agent 的执行风险。需要新增高权限能力时，应先在 Dazah 后端建立受控接口、权限校验、审计和确认机制，再通过 Hermes 工具白名单接入。
+
+### 3.3 模型接口兼容
+
+Hermes-Lite 当前主要使用 OpenAI-compatible Chat Completions 接口。实际模型供应商由 Dazah 平台 LLM 系统配置决定。
+
+适配时需要关注：
+
+- `/models` 接口是否可用。
+- `/chat/completions` 是否支持流式输出。
+- usage 字段可能存在 `prompt_tokens` / `completion_tokens` 或其他供应商差异。
+- 工具调用格式是否符合 OpenAI tool calling 语义。
+- 模型是否稳定支持中文业务指令和结构化 JSON 参数生成。
+
+## 4. 当前启用的工具集
+
+Hermes-Lite 的工具集定义位于 `toolsets.py`。
+
+当前 Dazah Agent 服务在 `services/dazah_agent_service.py` 中启用：
+
+```python
+enabled_toolsets=["agent", "dazah"]
+```
+
+主要工具如下：
+
+| 工具集 | 工具 | 用途 |
+| --- | --- | --- |
+| `agent` | `memory` | 保存稳定的用户或项目偏好 |
+| `agent` | `session_search` | 检索历史会话 |
+| `agent` | `todo` | 任务拆解与步骤管理 |
+| `agent` | `clarify` | 在意图不明确时提出澄清问题 |
+| `agent` | `web_search` | 搜索公开网页 |
+| `agent` | `web_extract` | 提取网页内容 |
+| `dazah` | `dazah_tool` | 调用 Dazah 平台仓储、采购等业务工具 |
+
+## 5. 当前 Dazah 业务操作白名单
+
+`dazah_tool` 当前允许调用以下业务操作：
+
+### 5.1 仓储模块
+
+| 操作 | 说明 |
+| --- | --- |
+| `warehouse.list_raw_materials` | 查询原辅料库存 |
+| `warehouse.list_packaging_materials` | 查询包材库存 |
+| `warehouse.list_products` | 查询成品库存 |
+| `warehouse.list_feishu_tables` | 查询飞书表配置 |
+| `warehouse.get_feishu_table_records` | 查询指定飞书表记录 |
+| `warehouse.get_feishu_domain_records` | 查询指定业务域飞书数据 |
+| `warehouse.get_feishu_ws_status` | 查询飞书同步状态 |
+| `warehouse.refresh_feishu_tables` | 刷新飞书表配置 |
+| `warehouse.set_feishu_tables_enabled` | 批量启停飞书表同步 |
+| `warehouse.set_feishu_table_enabled` | 启停单个飞书表同步 |
+| `warehouse.sync_feishu_table` | 同步指定飞书表 |
+| `warehouse.restart_feishu_ws` | 重启飞书 WebSocket 同步 |
+
+### 5.2 采购模块
+
+| 操作 | 说明 |
+| --- | --- |
+| `procurement.list_invoice_records` | 查询发票识别记录 |
+| `procurement.list_purchase_requests` | 查询采购申请列表 |
+| `procurement.get_purchase_request` | 查询采购申请详情 |
+| `procurement.create_purchase_request` | 创建采购申请 |
+| `procurement.update_purchase_request` | 更新采购申请 |
+| `procurement.submit_purchase_request` | 提交采购申请 |
+| `procurement.approve_purchase_request` | 审批通过采购申请 |
+| `procurement.reject_purchase_request` | 驳回采购申请 |
+| `procurement.list_purchase_orders` | 查询采购订单 |
+| `procurement.export_purchase_orders` | 导出采购订单 |
+| `procurement.list_contract_templates` | 获取四类合同模板、字段清单、必填项和模板文件信息 |
+| `procurement.get_contract_template` | 获取指定合同模板、字段清单、必填项和模板文件信息 |
+| `procurement.generate_contract` | 生成采购合同 |
+
+读操作可直接返回结果。写操作应由 Dazah 后端生成 pending confirmation，前端展示二次确认，用户确认后再执行。
+
+合同生成建议流程：
+
+1. 用户询问“有哪些合同模板/某类合同需要填什么字段”时，优先调用 `procurement.list_contract_templates` 或 `procurement.get_contract_template`。
+2. 用户要求生成合同时，先根据模板字段收集 `category`、`contract_number`、`contract_date`、`seller.*` 和至少一条 `items` 明细；`items` 每条至少需要 `name`、`quantity`、`unit_price`。
+3. 用户明确说“示例/样例/模板演示”时，可以调用 `procurement.generate_contract` 生成示例合同；Dazah 后端会按合同分类匹配对应 Word 模板。
+
+## 6. 如何与新的业务模块适配
+
+新增一个业务模块时，建议按以下顺序适配。
+
+### 6.1 在 Dazah 后端建立业务工具接口
+
+先在 Dazah 后端业务模块中提供明确的服务方法或 API，不建议让 Hermes 直接访问数据库。
+
+后端需要负责：
+
+- 登录用户和租户上下文识别。
+- 模块权限校验。
+- 参数校验和字段归一化。
+- 数据库事务。
+- 写操作二次确认。
+- 审计日志。
+- 错误信息结构化。
+
+### 6.2 在 Dazah Agent 工具网关注册 operation
+
+在 Dazah 后端 Agent 工具执行层新增 operation，例如：
+
+```text
+quality.list_inspections
+quality.get_inspection
+quality.create_inspection_task
+```
+
+建议 operation 命名采用：
+
+```text
+模块名.动作名
+```
+
+示例：
+
+```text
+warehouse.list_raw_materials
+procurement.create_purchase_request
+quality.list_inspections
+```
+
+### 6.3 在 Hermes-Lite 中加入白名单
+
+在 `tools/dazah_platform.py` 的 `ALLOWED_OPERATIONS` 中加入新 operation。
+
+示例：
+
+```python
+ALLOWED_OPERATIONS = [
+    "warehouse.list_raw_materials",
+    "procurement.list_purchase_requests",
+    "quality.list_inspections",
+]
+```
+
+如果希望 LLM 可用短名称调用，也可以让 `_build_operation_aliases()` 自动生成不冲突的后缀别名，例如 `list_inspections`。
+
+### 6.4 更新工具 schema 描述
+
+如果新模块需要特定参数，应补充 `DAZAH_TOOL_SCHEMA` 中 `params` 或 `body` 的描述，帮助模型生成更准确的结构化参数。
+
+示例：
+
+```text
+params: 查询参数，例如 page、page_size、status、keyword、date_from、date_to。
+body: 创建或更新操作的 JSON 请求体。
+```
+
+### 6.5 更新系统提示词
+
+在 `services/dazah_agent_service.py` 的 `_system_prompt()` 中补充模块边界和回复规范。
+
+当前提示词要求：
+
+- 不编造平台数据。
+- 必须通过 `dazah_tool` 查询平台业务数据。
+- 写操作只能生成确认项。
+- 禁止输出 Markdown 表格。
+- 少量数据卡片式展示。
+- 大量数据摘要 + 前几条 + 继续查看提示。
+- 复杂明细分组展示。
+
+新增模块时，应让模型清楚该模块支持哪些查询、哪些写操作需要确认、哪些字段必须重点展示。
+
+### 6.6 前端展示适配
+
+如果新模块返回复杂数据，优先让 LLM 组织成业务卡片式回复。对于稳定结构的数据，也可以在前端增加专用渲染组件。
+
+建议：
+
+- 少量数据：完整卡片。
+- 大量数据：摘要 + 前 3 条 + “查看更多”。
+- 复杂明细：折叠展示。
+- 异常数据：单独标记。
+- 避免 Markdown 表格。
+
+### 6.7 验证用例
+
+每个新模块至少验证以下场景：
+
+- 普通查询。
+- 带筛选条件查询。
+- 空结果。
+- 参数缺失。
+- 无权限。
+- 写操作生成确认项。
+- 用户确认后执行成功。
+- 用户取消确认。
+- 工具返回错误时的前端展示。
+- 流式输出中断。
+
+## 7. 数据查询方式
+
+Hermes-Lite 不直接查询数据库。
+
+数据查询统一走：
+
+```text
+Hermes-Lite
+  -> dazah_tool
+  -> Dazah 后端 Agent 工具网关
+  -> Dazah 后端业务模块
+  -> PostgreSQL / 飞书同步数据 / 业务服务
+```
+
+这样可以确保：
+
+- 数据权限仍由 Dazah 后端控制。
+- 数据库表结构不会暴露给 LLM。
+- 业务规则集中在后端。
+- 写操作可被确认和审计。
+- 后续新增模块时不会破坏 Agent 的安全边界。
+
+## 8. 字段筛选适配建议
+
+针对查询类工具，建议统一支持 `filters` 参数。
+
+建议格式：
+
+```json
+{
+  "filters": [
+    {
+      "field": "quantity",
+      "op": "gte",
+      "value": 100
+    }
+  ],
+  "page": 1,
+  "page_size": 20
+}
+```
+
+建议操作符：
+
+| 操作符 | 含义 |
+| --- | --- |
+| `eq` | 等于 |
+| `ne` | 不等于 |
+| `gt` | 大于 |
+| `gte` | 大于等于 |
+| `lt` | 小于 |
+| `lte` | 小于等于 |
+| `contains` | 包含 |
+| `in` | 在指定集合中 |
+| `between` | 区间范围 |
+
+建议由 Dazah 后端负责字段白名单、类型转换和 SQL 条件构造，Hermes 只负责根据用户自然语言生成结构化筛选参数。
+
+## 9. 本地运行
+
+安装依赖：
 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` with the API key for your selected provider, then instantiate or run
-the agent through `run_agent.py` / your embedding application.
-
-### Configuration
-
-The included `config.yaml` defaults to a custom OpenAI-compatible provider
-configuration. Keep provider API keys in `.env`; do not commit secrets.
-
-### Validation
-
-For a quick syntax check:
+本地启动 Hermes 适配服务：
 
 ```bash
-python -m py_compile run_agent.py model_tools.py toolsets.py
+uvicorn services.dazah_agent_service:app --host 0.0.0.0 --port 8100
 ```
 
-### License
+Docker 开发环境启动：
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8100/health
+```
+
+预期返回：
+
+```json
+{
+  "status": "ok"
+}
+```
+
+## 10. 环境变量
+
+| 变量 | 说明 |
+| --- | --- |
+| `HERMES_AGENT_TOKEN` | Dazah 后端调用 Hermes 的服务令牌 |
+| `AGENT_LLM_PROXY_TOKEN` | Hermes 调用 Dazah LLM 代理的服务令牌 |
+| `DAZAH_LLM_BASE_URL` | Dazah LLM 代理地址 |
+| `DAZAH_LLM_MODEL` | Hermes 请求时使用的模型名称，通常为 `dazah-active-text` |
+| `DAZAH_API_BASE_URL` | Dazah 后端 API 地址 |
+| `DAZAH_AGENT_TOOL_TOKEN` | Hermes 调用 Dazah 工具网关的服务令牌 |
+| `HERMES_DAZAH_CHAT_TIMEOUT_SECONDS` | Hermes 对话超时时间，默认 90 秒 |
+
+示例：
+
+```bash
+HERMES_AGENT_TOKEN=change-me
+AGENT_LLM_PROXY_TOKEN=change-me
+DAZAH_API_BASE_URL=http://app:8000/api/v1
+DAZAH_AGENT_TOOL_TOKEN=change-me
+DAZAH_LLM_BASE_URL=http://app:8000/api/v1/agent/llm
+DAZAH_LLM_MODEL=dazah-active-text
+HERMES_DAZAH_CHAT_TIMEOUT_SECONDS=90
+```
+
+## 11. 项目结构
+
+```text
+Hermes-Lite/
+├── agent/                    # Agent 核心运行时
+├── tools/                    # 工具注册中心和平台工具
+│   └── dazah_platform.py     # Dazah 平台工具网关
+├── services/
+│   └── dazah_agent_service.py # Dazah Agent 适配服务
+├── hermes_cli/               # 轻量配置和认证兼容辅助模块
+├── providers/                # 模型提供商扩展接口
+├── plugins/                  # 最小插件命名空间包
+├── scripts/                  # 工具脚本
+├── toolsets.py               # 工具集定义
+├── model_tools.py            # 工具 schema 加载与分发逻辑
+├── run_agent.py              # Agent 主入口
+├── config.yaml               # 默认配置
+└── docs/INTEGRATION.md       # 补充集成说明
+```
+
+## 12. 验证命令
+
+语法检查：
+
+```bash
+python -m py_compile run_agent.py model_tools.py toolsets.py services/dazah_agent_service.py tools/dazah_platform.py
+```
+
+容器内检查：
+
+```bash
+docker exec hermes-lite python -m py_compile /app/services/dazah_agent_service.py /app/tools/dazah_platform.py
+```
+
+健康检查：
+
+```bash
+docker exec hermes-lite python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=10).read().decode())"
+```
+
+## 13. 安全边界
+
+Hermes-Lite 在 Dazah 平台中的安全原则：
+
+- 不直接保存真实模型供应商密钥。
+- 不直接连接业务数据库。
+- 不绕过 Dazah 后端权限体系。
+- 不直接执行写操作，写操作必须进入确认流程。
+- 不默认启用终端、文件、浏览器、代码执行等高风险工具。
+- 不允许 LLM 调用任意 URL 执行业务操作。
+- 所有业务操作必须先进入 Dazah 后端白名单。
+- 所有工具调用都应可审计、可追踪、可失败恢复。
+
+## 14. License
 
 MIT. See [LICENSE](LICENSE).
-
-## 简体中文
-
-> 基于 Hermes Agent v0.16.0 的轻量裁剪版 Agent 核心。
-
-### 概述
-
-Hermes-Lite 保留 Hermes Agent 的通用 Agent 运行时、模型提供商接入、提示词组装、记忆支持、会话召回、Web 研究工具和工具注册机制，同时从默认工具集中移除了高风险本地自动化能力。
-
-这个仓库面向需要嵌入或二次扩展的轻量、Web 安全 Agent 核心；默认不包含数据库 RAG、浏览器自动化、终端执行或媒体生成能力。
-
-### 包含内容
-
-- Tool-calling 对话循环
-- OpenAI 兼容模型提供商支持
-- Web 搜索与网页内容提取工具
-- 持久化记忆与 per-user 用户画像辅助能力
-- 会话搜索、待办规划和澄清问题工具
-- 保留技能管理代码，但仅供管理员/开发者显式启用
-- 工具注册中心默认阻止危险本地工具自动发现
-
-### 默认工具集
-
-默认 `agent` 工具集只暴露以下通用工具：
-
-| 工具 | 用途 |
-|------|------|
-| `web_search` | 搜索公开网页来源 |
-| `web_extract` | 提取网页内容 |
-| `memory` | 保存稳定的用户/项目偏好 |
-| `session_search` | 召回历史会话 |
-| `todo` | 跟踪任务步骤 |
-| `clarify` | 提出简洁的澄清问题 |
-
-包含 `skill_manage` 的 `skills` 工具集仅在管理员或开发者显式启用时可用。
-
-
-### 项目结构
-
-```text
-Hermes-Lite/
-├── agent/              # Agent 核心运行时
-├── tools/              # 工具注册中心和保留的通用工具
-├── hermes_cli/         # 轻量配置/认证兼容辅助模块
-├── providers/          # 模型提供商扩展接口
-├── plugins/            # 最小插件命名空间包
-├── services/           # 保留的小型服务辅助模块
-├── scripts/            # 工具脚本
-├── toolsets.py         # 默认工具集定义
-├── model_tools.py      # 工具 schema 加载与分发胶水层
-├── run_agent.py        # Agent 主入口
-└── config.yaml         # 本地默认配置
-```
-
-### 快速开始
-
-```bash
-pip install -r requirements.txt
-cp .env.example .env
-```
-
-在 `.env` 中填写所选模型提供商的 API key，然后通过 `run_agent.py` 或你的宿主应用实例化/运行 Agent。
-
-### 配置
-
-仓库中的 `config.yaml` 默认使用自定义 OpenAI 兼容提供商配置。API key 应放在 `.env` 中，不要提交密钥。
-
-### 验证
-
-快速语法检查：
-
-```bash
-python -m py_compile run_agent.py model_tools.py toolsets.py
-```
-
-### 许可证
-
-MIT。详见 [LICENSE](LICENSE)。

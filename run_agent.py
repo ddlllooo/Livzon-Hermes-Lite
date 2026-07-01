@@ -71,6 +71,11 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
+# Compatibility for modules that still access ``run_agent._hermes_home``.
+# ``get_hermes_home()`` remains the source of truth; this mirrors the active
+# value for older extracted runtime helpers.
+_hermes_home = get_hermes_home()
+
 
 def _launch_cwd_for_session(source: str) -> Optional[str]:
     """Working directory to stamp on a new session row, or None.

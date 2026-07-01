@@ -11,19 +11,19 @@ def get_hermes_home():
     from pathlib import Path
     return Path(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes")))
 
-def ensure_hermes_home() -> str:
+def ensure_hermes_home() -> Path:
     """Ensure hermes home exists and return it."""
     home = get_hermes_home()
-    os.makedirs(home, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
     return home
 
-def get_config_path() -> str:
+def get_config_path() -> Path:
     """Return the config.yaml path."""
-    return os.path.join(get_hermes_home(), "config.yaml")
+    return get_hermes_home() / "config.yaml"
 
-def get_env_path() -> str:
+def get_env_path() -> Path:
     """Return the .env path."""
-    return os.path.join(get_hermes_home(), ".env")
+    return get_hermes_home() / ".env"
 
 def load_config(**kwargs) -> dict:
     """Load and return config dict. Cached after first load."""

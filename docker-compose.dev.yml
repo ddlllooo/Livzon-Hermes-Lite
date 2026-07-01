@@ -1,0 +1,37 @@
+services:
+  hermes-lite:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hermes-lite:dev
+    container_name: hermes-lite
+    env_file:
+      - .env
+    environment:
+      HERMES_HOME: /data/hermes
+      DAZAH_API_BASE_URL: http://app:8000/api/v1
+      DAZAH_LLM_BASE_URL: http://app:8000/api/v1/agent/llm
+      DAZAH_LLM_MODEL: ${DAZAH_LLM_MODEL:-dazah-active-text}
+    ports:
+      - "${HERMES_PORT:-8100}:8100"
+    volumes:
+      - .:/app
+      - hermes_data:/data/hermes
+    networks:
+      - backend
+    restart: unless-stopped
+    command: python -m uvicorn services.dazah_agent_service:app --host 0.0.0.0 --port 8100 --reload --reload-dir /app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3).read()\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+networks:
+  backend:
+    external: true
+    name: ${BACKEND_NETWORK:-dazah-backend_default}
+
+volumes:
+  hermes_data:

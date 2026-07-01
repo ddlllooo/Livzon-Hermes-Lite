@@ -23,6 +23,7 @@ _RESET = "\033[0m"
 logger = logging.getLogger(__name__)
 
 _ANSI_RESET = "\033[0m"
+_tool_preview_max_len = 0
 
 # Diff colors — resolved lazily from the skin engine so they adapt
 # to light/dark themes.  Falls back to sensible defaults on import
