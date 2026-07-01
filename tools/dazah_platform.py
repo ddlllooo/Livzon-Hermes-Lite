@@ -35,6 +35,7 @@ ALLOWED_OPERATIONS = [
     "warehouse.sync_feishu_table",
     "warehouse.restart_feishu_ws",
     "procurement.list_invoice_records",
+    "procurement.list_suppliers",
     "procurement.list_purchase_requests",
     "procurement.get_purchase_request",
     "procurement.create_purchase_request",
@@ -47,6 +48,14 @@ ALLOWED_OPERATIONS = [
     "procurement.list_contract_templates",
     "procurement.get_contract_template",
     "procurement.generate_contract",
+    "agent.list_workflow_capabilities",
+    "agent.create_workflow",
+    "agent.list_workflows",
+    "agent.get_workflow",
+    "agent.set_workflow_enabled",
+    "agent.run_workflow",
+    "agent.cancel_workflow_run",
+    "agent.get_workflow_run",
 ]
 
 

@@ -46,11 +46,11 @@ def _require_token(authorization: str | None) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid Hermes token")
 
 
-def _system_prompt() -> str:
-    return (
+def _system_prompt(progressive_skills: list[dict[str, Any]] | None = None) -> str:
+    base_prompt = (
         "你是工厂管理平台的Agent助手，只服务仓储和采购模块。"
         "你必须通过 dazah_tool 获取平台数据或创建写操作确认项；"
-        "不要编造库存、采购申请、订单、合同或飞书同步状态。"
+        "不要编造库存、供应商、采购申请、订单、合同或飞书同步状态。"
         "写操作只会生成确认项，用户确认前不得声称已经执行。"
         "回答要像业务系统里的卡片式回复，禁止输出 Markdown 表格，禁止使用 |---| 这类表格语法。"
         "少量数据要完整展示为字段清晰的卡片式文本；大量数据先给摘要、前 3 条记录，并提示可继续查看更多；"
@@ -66,6 +66,23 @@ def _system_prompt() -> str:
         "- - 每个规格独立换行展示"
         "- - 异常数据要单独标记"
         "- 如果数据超过 5 条规格，只展示前 5 条，并提示用户可以继续查看全部。"
+    )
+    if not progressive_skills:
+        return base_prompt
+    skill_blocks = []
+    for skill in progressive_skills:
+        name = skill.get("name") or "unknown"
+        title = skill.get("title") or name
+        content = skill.get("content") or ""
+        if content:
+            skill_blocks.append(f"## {title} ({name})\n{content}")
+    if not skill_blocks:
+        return base_prompt
+    return (
+        base_prompt
+        + "\n\n# 本轮相关内置 Skill\n"
+        + "以下 Skill 由 Dazah 后端按用户消息渐进式披露。若与当前请求相关，必须遵循。\n"
+        + "\n\n".join(skill_blocks)
     )
 
 
@@ -97,6 +114,10 @@ def _extract_confirmations(agent: AIAgent) -> list[dict[str, Any]]:
     return confirmations
 
 
+def _base_url() -> str:
+    return os.getenv("DAZAH_API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
+
+
 async def _check_dazah_llm_proxy() -> str | None:
     token = os.getenv("AGENT_LLM_PROXY_TOKEN", "")
     base_url = os.getenv("DAZAH_LLM_BASE_URL", "http://127.0.0.1:8000/api/v1/agent/llm").rstrip("/")
@@ -115,8 +136,39 @@ async def _check_dazah_llm_proxy() -> str | None:
     return None
 
 
+async def _resolve_progressive_skills(payload: DazahChatRequest) -> list[dict[str, Any]]:
+    token = os.getenv("DAZAH_AGENT_TOOL_TOKEN", "")
+    if not token:
+        return []
+    request_payload = {
+        "message": payload.message,
+        "enabled_toolsets": ["agent", "dazah"],
+        "business_scope": payload.context.get("scope") or ["warehouse", "procurement"],
+        "available_tools": ["dazah_tool", "memory", "session_search", "todo", "clarify"],
+        "limit": 3,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{_base_url()}/agent/skills/resolve",
+                json=request_payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if response.status_code >= 400:
+            logger.warning("Dazah skill resolver returned %s: %s", response.status_code, response.text[:500])
+            return []
+        payload_data = response.json()
+        data = payload_data.get("data") if isinstance(payload_data, dict) else None
+        skills = data.get("skills") if isinstance(data, dict) else None
+        return skills if isinstance(skills, list) else []
+    except Exception:
+        logger.exception("Dazah skill resolver failed")
+        return []
+
+
 def _run_agent_conversation(
     payload: DazahChatRequest,
+    progressive_skills: list[dict[str, Any]] | None = None,
     stream_callback: Callable[[str | None], None] | None = None,
 ) -> tuple[AIAgent, dict[str, Any]]:
     agent = AIAgent(
@@ -132,7 +184,7 @@ def _run_agent_conversation(
     )
     result = agent.run_conversation(
         payload.message,
-        system_message=_system_prompt(),
+        system_message=_system_prompt(progressive_skills),
         conversation_history=_history(payload.messages),
         stream_callback=stream_callback,
     )
@@ -161,9 +213,10 @@ async def chat(payload: DazahChatRequest, authorization: str | None = Header(def
                     pending_confirmations=[],
                     tool_trace=[],
                 )
+            progressive_skills = await _resolve_progressive_skills(payload)
             timeout_seconds = int(os.getenv("HERMES_DAZAH_CHAT_TIMEOUT_SECONDS", "90"))
             agent, result = await asyncio.wait_for(
-                asyncio.to_thread(_run_agent_conversation, payload),
+                asyncio.to_thread(_run_agent_conversation, payload, progressive_skills),
                 timeout=timeout_seconds,
             )
         except TimeoutError:
@@ -209,9 +262,17 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
                 yield _sse_event("error", {"message": f"Livzon Agent 运行异常：{proxy_error}"})
                 return
 
+            progressive_skills = await _resolve_progressive_skills(payload)
             timeout_seconds = int(os.getenv("HERMES_DAZAH_CHAT_TIMEOUT_SECONDS", "90"))
             deadline = time.monotonic() + timeout_seconds
-            task = asyncio.create_task(asyncio.to_thread(_run_agent_conversation, payload, on_delta))
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    _run_agent_conversation,
+                    payload,
+                    progressive_skills,
+                    on_delta,
+                )
+            )
             while True:
                 if task.done() and queue.empty():
                     break
