@@ -22,6 +22,7 @@ dazah_request_context: contextvars.ContextVar[dict[str, Any]] = contextvars.Cont
 )
 
 ALLOWED_OPERATIONS = [
+    "analytics.aggregate",
     "warehouse.list_raw_materials",
     "warehouse.list_packaging_materials",
     "warehouse.list_products",
@@ -149,9 +150,12 @@ DAZAH_TOOL_SCHEMA = {
     "name": "dazah_tool",
     "description": (
         "Call Dazah platform warehouse/procurement operations through the Agent "
-        "tool gateway. Read operations execute immediately. Write operations "
-        "return a pending confirmation for the frontend to display; never claim "
-        "a write operation has executed until the gateway result says it has."
+        "tool gateway. For full-dataset counts, TopN, distributions, distinct "
+        "counts, or grouped statistics, prefer analytics.aggregate instead of "
+        "paging through list operations. Read operations execute immediately. "
+        "Write operations return a pending confirmation for the frontend to "
+        "display; never claim a write operation has executed until the gateway "
+        "result says it has."
     ),
     "parameters": {
         "type": "object",
