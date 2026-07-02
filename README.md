@@ -77,11 +77,29 @@ DAZAH_LLM_BASE_URL=http://app:8000/api/v1/agent/llm
 
 Hermes-Lite 通过 `tools/dazah_platform.py` 中的 `dazah_tool` 调用 Dazah 平台业务能力。
 
-`dazah_tool` 不允许模型调用任意 URL，只允许向 Dazah 后端工具网关发送白名单操作：
+`dazah_tool` 不允许模型调用任意 URL，只允许向 Dazah 后端 Agent 工具网关发送受控 operation。Dazah 后端现在以 `@agent_tool` 装饰器、`ToolRegistry` 注册中心和 `ToolExecutor` 统一执行器作为权威工具来源；Hermes 侧只负责发起工具调用，不直接操作数据库，也不绕过后端权限、参数校验、确认和审计。
 
 ```text
 POST {DAZAH_API_BASE_URL}/agent/tools/execute
 ```
+
+Dazah 后端同时提供服务令牌保护的工具发现接口：
+
+```text
+GET {DAZAH_API_BASE_URL}/agent/tools
+```
+
+该接口返回后端当前已注册、授权、开放给 Agent 的工具元数据，包括：
+
+- `name`：工具名称，例如 `procurement.list_suppliers`
+- `summary`：工具说明
+- `input_schema`：Pydantic 输入参数 schema
+- `risk_level`：风险等级，`low` / `medium` / `high`
+- `write`：是否写操作
+- `required_roles`：所需用户角色
+- `workflow_allowed`：是否允许进入 Agent 工作流
+- `human_decision_required`：是否必须人工责任判断
+- `method` / `path`：兼容旧能力说明的 HTTP 元数据
 
 相关环境变量：
 
@@ -91,6 +109,18 @@ DAZAH_AGENT_TOOL_TOKEN=change-me
 ```
 
 所有业务权限、参数校验、写操作确认、审计记录、数据库事务和飞书凭证都保留在 Dazah 后端，Hermes 只负责发起受控工具调用。
+
+后端工具调用的执行边界为：
+
+```text
+Hermes-Lite dazah_tool
+  -> Dazah /api/v1/agent/tools/execute
+  -> ToolRegistry 查找 @agent_tool 注册工具
+  -> ToolExecutor 校验服务令牌、用户、权限、参数、风险
+  -> 写操作生成 confirmation / 读操作直接执行
+  -> 调用业务模块 Service
+  -> 写入 agent_tool_calls 与 audit.logs
+```
 
 ### 2.3 聊天接口
 
@@ -131,7 +161,7 @@ Hermes-Lite 保留 Hermes Agent 的核心运行能力，但对默认功能面做
 - 未经 Dazah 后端网关授权的数据库直连。
 - 任意第三方 URL 工具调用。
 
-这样做的目的是降低业务系统内嵌 Agent 的执行风险。需要新增高权限能力时，应先在 Dazah 后端建立受控接口、权限校验、审计和确认机制，再通过 Hermes 工具白名单接入。
+这样做的目的是降低业务系统内嵌 Agent 的执行风险。需要新增高权限能力时，应先在 Dazah 后端建立受控 Service、权限校验、审计和确认机制，再通过 `@agent_tool` 注册为受控工具，最后同步 Hermes 工具 schema。
 
 ### 3.3 模型接口兼容
 
@@ -167,9 +197,11 @@ enabled_toolsets=["agent", "dazah"]
 | `agent` | `web_extract` | 提取网页内容 |
 | `dazah` | `dazah_tool` | 调用 Dazah 平台仓储、采购等业务工具 |
 
-## 5. 当前 Dazah 业务操作白名单
+## 5. 当前 Dazah 后端注册工具
 
-`dazah_tool` 当前允许调用以下业务操作：
+以下工具由 Dazah 后端通过 `@agent_tool` 注册并由 `ToolRegistry` 统一管理。Hermes-Lite 的 `dazah_tool` 调用这些 operation 时，后端会再次校验工具是否注册、用户是否有权限、参数是否符合 InputSchema，以及该操作是否需要确认或必须人工判断。
+
+Hermes-Lite 中 `tools/dazah_platform.py` 的 `ALLOWED_OPERATIONS` 仍保留为本地防御层和模型 tool schema 枚举，实际授权以 Dazah 后端 `GET /api/v1/agent/tools` 与 `POST /api/v1/agent/tools/execute` 为准。新增工具后，应同步后端注册表与 Hermes 本地 schema，避免模型选择未暴露的 operation。
 
 ### 5.1 仓储模块
 
@@ -193,6 +225,7 @@ enabled_toolsets=["agent", "dazah"]
 | 操作 | 说明 |
 | --- | --- |
 | `procurement.list_invoice_records` | 查询发票识别记录 |
+| `procurement.list_suppliers` | 查询供应商清单 |
 | `procurement.list_purchase_requests` | 查询采购申请列表 |
 | `procurement.get_purchase_request` | 查询采购申请详情 |
 | `procurement.create_purchase_request` | 创建采购申请 |
@@ -214,13 +247,32 @@ enabled_toolsets=["agent", "dazah"]
 2. 用户要求生成合同时，先根据模板字段收集 `category`、`contract_number`、`contract_date`、`seller.*` 和至少一条 `items` 明细；`items` 每条至少需要 `name`、`quantity`、`unit_price`。
 3. 用户明确说“示例/样例/模板演示”时，可以调用 `procurement.generate_contract` 生成示例合同；Dazah 后端会按合同分类匹配对应 Word 模板。
 
+### 5.3 Agent 工作流工具
+
+| 操作 | 说明 |
+| --- | --- |
+| `agent.list_workflow_capabilities` | 查询当前可编排业务能力 |
+| `agent.create_workflow` | 创建助手工作流 |
+| `agent.list_workflows` | 查询我的助手工作流 |
+| `agent.get_workflow` | 查看助手工作流详情 |
+| `agent.set_workflow_enabled` | 启停助手工作流 |
+| `agent.run_workflow` | 运行助手工作流 |
+| `agent.cancel_workflow_run` | 取消助手工作流运行 |
+| `agent.get_workflow_run` | 查看助手工作流运行状态 |
+
+工作流规则由 Dazah 后端 `ToolRegistry` 和 `ToolExecutor` 控制：
+
+- 只有 `workflow_allowed=true` 且 `human_decision_required=false` 的业务工具可进入工作流。
+- 工作流中的写操作会暂停并生成 confirmation，用户确认后才继续执行。
+- 审批、驳回、批准、重启等人工责任判断操作不得被加入工作流。
+
 ## 6. 如何与新的业务模块适配
 
 新增一个业务模块时，建议按以下顺序适配。
 
-### 6.1 在 Dazah 后端建立业务工具接口
+### 6.1 在 Dazah 后端建立业务 Service
 
-先在 Dazah 后端业务模块中提供明确的服务方法或 API，不建议让 Hermes 直接访问数据库。
+先在 Dazah 后端业务模块中提供明确的 Service 方法，不建议让 Hermes 直接访问数据库，也不建议让工具 handler 直接操作 ORM model。
 
 后端需要负责：
 
@@ -232,20 +284,56 @@ enabled_toolsets=["agent", "dazah"]
 - 审计日志。
 - 错误信息结构化。
 
-### 6.2 在 Dazah Agent 工具网关注册 operation
+### 6.2 编写 InputSchema 并注册 @agent_tool
 
-在 Dazah 后端 Agent 工具执行层新增 operation，例如：
+在业务模块内创建或更新 `agent_tools.py`，定义 Pydantic v2 InputSchema，并使用 `@agent_tool` 注册 operation。
+
+推荐目录：
 
 ```text
-quality.list_inspections
-quality.get_inspection
-quality.create_inspection_task
+app/modules/<module>/agent_tools.py
 ```
+
+示例：
+
+```python
+from pydantic import BaseModel
+
+from app.modules.agent.tools import ToolContext, agent_tool
+
+
+class QualityInspectionListInput(BaseModel):
+    status: str | None = None
+    keyword: str | None = None
+    page: int = 1
+    page_size: int = 20
+
+
+@agent_tool(
+    name="quality.list_inspections",
+    summary="查询质量检查记录",
+    input_model=QualityInspectionListInput,
+    write=False,
+    risk_level="medium",
+    workflow_allowed=True,
+    method="GET",
+    path="/quality/inspections",
+)
+async def list_quality_inspections(
+    context: ToolContext,
+    data: QualityInspectionListInput,
+) -> dict:
+    ...
+```
+
+工具 handler 应调用本模块 Service 或 public API，不直接操作数据库，不直接调用其他模块内部实现。
+
+### 6.3 命名 operation
 
 建议 operation 命名采用：
 
 ```text
-模块名.动作名
+模块名.动作名_资源名
 ```
 
 示例：
@@ -256,34 +344,37 @@ procurement.create_purchase_request
 quality.list_inspections
 ```
 
-### 6.3 在 Hermes-Lite 中加入白名单
+### 6.4 触发后端工具注册
 
-在 `tools/dazah_platform.py` 的 `ALLOWED_OPERATIONS` 中加入新 operation。
+在 Dazah 后端 `app/modules/agent/tool_registration.py` 中导入新模块的 `agent_tools.py`，保证 FastAPI 启动时触发装饰器注册。
 
 示例：
 
 ```python
-ALLOWED_OPERATIONS = [
-    "warehouse.list_raw_materials",
-    "procurement.list_purchase_requests",
-    "quality.list_inspections",
-]
+import app.modules.quality.agent_tools  # noqa: F401
 ```
 
-如果希望 LLM 可用短名称调用，也可以让 `_build_operation_aliases()` 自动生成不冲突的后缀别名，例如 `list_inspections`。
-
-### 6.4 更新工具 schema 描述
-
-如果新模块需要特定参数，应补充 `DAZAH_TOOL_SCHEMA` 中 `params` 或 `body` 的描述，帮助模型生成更准确的结构化参数。
-
-示例：
+注册成功后，Dazah 后端会通过以下接口暴露工具元数据：
 
 ```text
-params: 查询参数，例如 page、page_size、status、keyword、date_from、date_to。
-body: 创建或更新操作的 JSON 请求体。
+GET /api/v1/agent/tools
 ```
 
-### 6.5 更新系统提示词
+### 6.5 同步 Hermes-Lite 本地 schema
+
+Hermes-Lite 当前仍在 `tools/dazah_platform.py` 中保留 `ALLOWED_OPERATIONS`，用于模型工具 schema 枚举和本地防御层。新增后端工具后，需要同步：
+
+- `ALLOWED_OPERATIONS`
+- `DAZAH_TOOL_SCHEMA["parameters"]["properties"]["operation"]["enum"]`
+- 如有必要，更新 README 工具清单和系统提示词
+
+后续如果 Hermes 改为启动时动态读取 `GET /api/v1/agent/tools`，则 `ALLOWED_OPERATIONS` 可以降级为离线兜底缓存。
+
+### 6.6 更新工具 schema 描述
+
+如果新模块需要特定参数，应补充工具输入模型和 `input_schema` 描述，帮助模型生成更准确的结构化参数。参数校验最终由 Dazah 后端 Pydantic InputSchema 负责。
+
+### 6.7 更新系统提示词
 
 在 `services/dazah_agent_service.py` 的 `_system_prompt()` 中补充模块边界和回复规范。
 
@@ -299,7 +390,7 @@ body: 创建或更新操作的 JSON 请求体。
 
 新增模块时，应让模型清楚该模块支持哪些查询、哪些写操作需要确认、哪些字段必须重点展示。
 
-### 6.6 前端展示适配
+### 6.8 前端展示适配
 
 如果新模块返回复杂数据，优先让 LLM 组织成业务卡片式回复。对于稳定结构的数据，也可以在前端增加专用渲染组件。
 
@@ -311,7 +402,7 @@ body: 创建或更新操作的 JSON 请求体。
 - 异常数据：单独标记。
 - 避免 Markdown 表格。
 
-### 6.7 验证用例
+### 6.9 验证用例
 
 每个新模块至少验证以下场景：
 
@@ -419,6 +510,15 @@ curl http://127.0.0.1:8100/health
 }
 ```
 
+Dazah 后端工具发现检查：
+
+```bash
+curl -H "Authorization: Bearer $DAZAH_AGENT_TOOL_TOKEN" \
+  "$DAZAH_API_BASE_URL/agent/tools"
+```
+
+该接口应返回后端当前注册的 Agent 工具列表。Hermes 本地 `ALLOWED_OPERATIONS` 应与该列表保持同步。
+
 ## 10. 环境变量
 
 | 变量 | 说明 |
@@ -493,7 +593,7 @@ Hermes-Lite 在 Dazah 平台中的安全原则：
 - 不直接执行写操作，写操作必须进入确认流程。
 - 不默认启用终端、文件、浏览器、代码执行等高风险工具。
 - 不允许 LLM 调用任意 URL 执行业务操作。
-- 所有业务操作必须先进入 Dazah 后端白名单。
+- 所有业务操作必须先注册到 Dazah 后端 `ToolRegistry`。
 - 所有工具调用都应可审计、可追踪、可失败恢复。
 
 ## 14. License

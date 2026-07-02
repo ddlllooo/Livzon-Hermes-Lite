@@ -273,6 +273,7 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
                     on_delta,
                 )
             )
+            last_heartbeat = time.monotonic()
             while True:
                 if task.done() and queue.empty():
                     break
@@ -287,7 +288,12 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
                 try:
                     item = await asyncio.wait_for(queue.get(), timeout=0.2)
                 except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    if now - last_heartbeat >= 10:
+                        last_heartbeat = now
+                        yield _sse_event("ping", {"ts": int(now)})
                     continue
+                last_heartbeat = time.monotonic()
                 yield _sse_event(item["event"], item["data"])
 
             try:
