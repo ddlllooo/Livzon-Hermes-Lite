@@ -12,6 +12,8 @@ services:
       DAZAH_API_BASE_URL: http://app:8000/api/v1
       DAZAH_LLM_BASE_URL: http://app:8000/api/v1/agent/llm
       DAZAH_LLM_MODEL: ${DAZAH_LLM_MODEL:-dazah-active-text}
+      HERMES_DAZAH_CHAT_TIMEOUT_SECONDS: ${HERMES_DAZAH_CHAT_TIMEOUT_SECONDS:-180}
+      HERMES_DAZAH_MAX_TOOL_ITERATIONS: ${HERMES_DAZAH_MAX_TOOL_ITERATIONS:-30}
     ports:
       - "${HERMES_PORT:-8100}:8100"
     volumes:

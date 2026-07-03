@@ -36,6 +36,22 @@ class DazahChatResponse(BaseModel):
 app = FastAPI(title="Hermes-Lite Dazah Adapter")
 
 
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    raw_value = os.getenv(name)
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("Invalid integer env %s=%r, using default %s", name, raw_value, default)
+        return default
+    if value < minimum:
+        return minimum
+    if maximum is not None and value > maximum:
+        return maximum
+    return value
+
+
 def _require_token(authorization: str | None) -> None:
     expected = os.getenv("HERMES_AGENT_TOKEN")
     if not expected:
@@ -48,10 +64,14 @@ def _require_token(authorization: str | None) -> None:
 
 def _system_prompt(progressive_skills: list[dict[str, Any]] | None = None) -> str:
     base_prompt = (
-        "你是工厂管理平台的Agent助手，只服务仓储和采购模块。"
+        "你是工厂管理平台的Agent助手，服务仓储、采购和 Livzon 助手通讯录查询。"
         "你必须通过 dazah_tool 获取平台数据或创建写操作确认项；"
-        "不要编造库存、供应商、采购申请、订单、合同或飞书同步状态。"
+        "不要编造库存、供应商、采购申请、订单、合同、人员通讯录或飞书同步状态。"
+        "涉及今天、明天、每天几点或设置定时任务时，必须先调用 agent.get_current_time 获取当前北京时间和 cron 时区。"
         "写操作只会生成确认项，用户确认前不得声称已经执行。"
+        "发送飞书消息时优先使用 identity.send_feishu_message：低价值、短消息发文本；"
+        "中高价值、结构化消息发卡片；需要处理的业务消息发交互卡片。"
+        "发送确认前必须展示收件人、消息形态、标题/正文摘要，以及是否包含处理按钮。"
         "回答要像业务系统里的卡片式回复，禁止输出 Markdown 表格，禁止使用 |---| 这类表格语法。"
         "少量数据要完整展示为字段清晰的卡片式文本；大量数据先给摘要、前 3 条记录，并提示可继续查看更多；"
         "复杂明细要先给关键结论，再用分组列表呈现明细，不要把所有字段堆成一行。"
@@ -96,21 +116,62 @@ def _history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def _extract_confirmations(agent: AIAgent) -> list[dict[str, Any]]:
+def _looks_like_confirmation(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("id"), str)
+        and isinstance(value.get("operation"), str)
+        and isinstance(value.get("summary"), str)
+        and isinstance(value.get("risk_level"), str)
+        and isinstance(value.get("status"), str)
+        and isinstance(value.get("expires_at"), str)
+    )
+
+
+def _collect_confirmations(value: Any, seen: set[str]) -> list[dict[str, Any]]:
+    confirmations: list[dict[str, Any]] = []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return confirmations
+    if isinstance(value, list):
+        for item in value:
+            confirmations.extend(_collect_confirmations(item, seen))
+        return confirmations
+    if not isinstance(value, dict):
+        return confirmations
+
+    if value.get("requires_confirmation") and _looks_like_confirmation(value.get("confirmation")):
+        confirmation = value["confirmation"]
+        confirmation_id = confirmation["id"]
+        if confirmation_id not in seen:
+            seen.add(confirmation_id)
+            confirmations.append(confirmation)
+    if _looks_like_confirmation(value.get("pending_confirmation")):
+        confirmation = value["pending_confirmation"]
+        confirmation_id = confirmation["id"]
+        if confirmation_id not in seen:
+            seen.add(confirmation_id)
+            confirmations.append(confirmation)
+    if _looks_like_confirmation(value):
+        confirmation_id = value["id"]
+        if confirmation_id not in seen:
+            seen.add(confirmation_id)
+            confirmations.append(value)
+
+    for item in value.values():
+        confirmations.extend(_collect_confirmations(item, seen))
+    return confirmations
+
+
+def _extract_confirmations(agent: AIAgent, result: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    seen: set[str] = set()
     confirmations: list[dict[str, Any]] = []
     for message in getattr(agent, "_session_messages", []) or []:
-        if not isinstance(message, dict) or message.get("role") != "tool":
-            continue
-        content = message.get("content")
-        if not isinstance(content, str):
-            continue
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError:
-            continue
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if isinstance(data, dict) and data.get("requires_confirmation") and isinstance(data.get("confirmation"), dict):
-            confirmations.append(data["confirmation"])
+        confirmations.extend(_collect_confirmations(message, seen))
+    if result:
+        confirmations.extend(_collect_confirmations(result, seen))
     return confirmations
 
 
@@ -143,7 +204,7 @@ async def _resolve_progressive_skills(payload: DazahChatRequest) -> list[dict[st
     request_payload = {
         "message": payload.message,
         "enabled_toolsets": ["agent", "dazah"],
-        "business_scope": payload.context.get("scope") or ["warehouse", "procurement"],
+        "business_scope": payload.context.get("scope") or ["identity", "warehouse", "procurement"],
         "available_tools": ["dazah_tool", "memory", "session_search", "todo", "clarify"],
         "limit": 3,
     }
@@ -179,6 +240,7 @@ def _run_agent_conversation(
         enabled_toolsets=["agent", "dazah"],
         disabled_toolsets=[],
         quiet_mode=True,
+        max_iterations=_env_int("HERMES_DAZAH_MAX_TOOL_ITERATIONS", 30, minimum=1, maximum=90),
         user_id=payload.context.get("user_id"),
         thread_id=payload.session_id,
     )
@@ -214,7 +276,7 @@ async def chat(payload: DazahChatRequest, authorization: str | None = Header(def
                     tool_trace=[],
                 )
             progressive_skills = await _resolve_progressive_skills(payload)
-            timeout_seconds = int(os.getenv("HERMES_DAZAH_CHAT_TIMEOUT_SECONDS", "90"))
+            timeout_seconds = _env_int("HERMES_DAZAH_CHAT_TIMEOUT_SECONDS", 180, minimum=30, maximum=900)
             agent, result = await asyncio.wait_for(
                 asyncio.to_thread(_run_agent_conversation, payload, progressive_skills),
                 timeout=timeout_seconds,
@@ -236,7 +298,7 @@ async def chat(payload: DazahChatRequest, authorization: str | None = Header(def
         message = result.get("final_response") or "我没有生成有效回复，请稍后重试。"
         return DazahChatResponse(
             message=message,
-            pending_confirmations=_extract_confirmations(agent),
+            pending_confirmations=_extract_confirmations(agent, result),
             tool_trace=result.get("tool_trace") or [],
         )
     finally:
@@ -263,7 +325,7 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
                 return
 
             progressive_skills = await _resolve_progressive_skills(payload)
-            timeout_seconds = int(os.getenv("HERMES_DAZAH_CHAT_TIMEOUT_SECONDS", "90"))
+            timeout_seconds = _env_int("HERMES_DAZAH_CHAT_TIMEOUT_SECONDS", 180, minimum=30, maximum=900)
             deadline = time.monotonic() + timeout_seconds
             task = asyncio.create_task(
                 asyncio.to_thread(
@@ -314,7 +376,7 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
                 "done",
                 {
                     "message": result.get("final_response") or "我没有生成有效回复，请稍后重试。",
-                    "pending_confirmations": _extract_confirmations(agent),
+                    "pending_confirmations": _extract_confirmations(agent, result),
                     "tool_trace": result.get("tool_trace") or [],
                 },
             )

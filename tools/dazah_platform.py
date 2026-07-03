@@ -2,7 +2,7 @@
 """Dazah platform tool gateway for Hermes-Lite.
 
 The tool never calls arbitrary URLs. It only posts operation requests to the
-Dazah Agent tool gateway, where the actual warehouse/procurement whitelist is
+Dazah Agent tool gateway, where the actual Dazah whitelist is
 enforced and write operations become user confirmations.
 """
 
@@ -23,6 +23,12 @@ dazah_request_context: contextvars.ContextVar[dict[str, Any]] = contextvars.Cont
 
 ALLOWED_OPERATIONS = [
     "analytics.aggregate",
+    "identity.get_department_tree",
+    "identity.search_personnel",
+    "identity.check_feishu_permissions",
+    "identity.send_feishu_message",
+    "identity.send_feishu_text_message",
+    "identity.send_feishu_card_message",
     "warehouse.list_raw_materials",
     "warehouse.list_packaging_materials",
     "warehouse.list_products",
@@ -49,6 +55,7 @@ ALLOWED_OPERATIONS = [
     "procurement.list_contract_templates",
     "procurement.get_contract_template",
     "procurement.generate_contract",
+    "agent.get_current_time",
     "agent.list_workflow_capabilities",
     "agent.create_workflow",
     "agent.list_workflows",
@@ -149,13 +156,23 @@ async def dazah_tool(
 DAZAH_TOOL_SCHEMA = {
     "name": "dazah_tool",
     "description": (
-        "Call Dazah platform warehouse/procurement operations through the Agent "
+        "Call Dazah platform identity, warehouse, and procurement operations through the Agent "
         "tool gateway. For full-dataset counts, TopN, distributions, distinct "
         "counts, or grouped statistics, prefer analytics.aggregate instead of "
         "paging through list operations. Read operations execute immediately. "
         "Write operations return a pending confirmation for the frontend to "
         "display; never claim a write operation has executed until the gateway "
-        "result says it has."
+        "result says it has. Before creating or adjusting daily scheduled tasks, "
+        "call agent.get_current_time to get the current Asia/Shanghai time and "
+        "cron timezone; do not guess today's date or current time. "
+        "For Feishu outbound messages, prefer identity.send_feishu_message. "
+        "Use low value short unstructured notifications as text; use medium/high "
+        "value or structured summaries as cards; use requires_business_action=true "
+        "for business messages that need handling, which sends callback interactive "
+        "cards. First identify recipients via identity.search_personnel and "
+        "summarize recipients, message shape, title/body summary, and whether "
+        "handling buttons are included before user confirmation. Old text/card "
+        "operations are compatibility-only."
     ),
     "parameters": {
         "type": "object",
@@ -195,6 +212,6 @@ registry.register(
     check_fn=check_dazah_requirements,
     requires_env=["DAZAH_AGENT_TOOL_TOKEN"],
     is_async=True,
-    description="Dazah warehouse/procurement tool gateway",
+    description="Dazah platform tool gateway",
     emoji="",
 )
