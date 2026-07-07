@@ -92,7 +92,7 @@ TOOLSETS = {
         "includes": []
     },
     "dazah": {
-        "description": "Dazah platform warehouse and procurement tools",
+        "description": "Dazah platform identity, warehouse, procurement, and quality tools",
         "tools": ["dazah_tool"],
         "includes": []
     },

@@ -109,9 +109,9 @@ Security boundaries:
 - The active text model is resolved by Dazah backend from the platform LLM
   configuration table on every request.
 - The `dazah` toolset only calls the Dazah Agent tool gateway.
-- Warehouse/procurement operation whitelisting, write confirmations, business
-  permissions, audit records, Feishu credentials, and transaction execution stay
-  in the Dazah backend.
+- Identity/warehouse/procurement/quality operation whitelisting, write
+  confirmations, business permissions, audit records, Feishu credentials, and
+  transaction execution stay in the Dazah backend.
 
 ## Toolsets
 
@@ -124,7 +124,7 @@ Security boundaries:
 | `todo` | `todo` | Task planning |
 | `clarify` | `clarify` | Clarifying questions |
 | `skills` | `skill_manage` | Administrator/developer opt-in only |
-| `dazah` | `dazah_tool` | Dazah warehouse/procurement gateway only |
+| `dazah` | `dazah_tool` | Dazah identity/warehouse/procurement/quality gateway only |
 
 ## Removed Business Extensions
 

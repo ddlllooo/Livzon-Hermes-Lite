@@ -5,6 +5,7 @@ import json
 import asyncio
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -15,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from run_agent import AIAgent
-from tools.dazah_platform import dazah_request_context
+from tools.dazah_platform import dazah_request_context, dazah_tool
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,15 @@ def _require_token(authorization: str | None) -> None:
 
 def _system_prompt(progressive_skills: list[dict[str, Any]] | None = None) -> str:
     base_prompt = (
-        "你是工厂管理平台的Agent助手，服务仓储、采购和 Livzon 助手通讯录查询。"
+        "你是工厂管理平台的Agent助手，服务仓储、采购、质量管理和 Livzon 助手通讯录查询。"
         "你必须通过 dazah_tool 获取平台数据或创建写操作确认项；"
-        "不要编造库存、供应商、采购申请、订单、合同、人员通讯录或飞书同步状态。"
+        "不要编造库存、供应商、采购申请、订单、合同、质量记录、人员通讯录或飞书同步状态。"
+        "用户询问质量模块、偏差、偏差报告记录、CAPA、变更、变更计划、验证、CPV、质量飞书台账或质量同步时，"
+        "必须优先调用 dazah_tool 的 quality.* operation，而不是仓储飞书表目录或普通飞书同步表查询。"
+        "用户说“质量模块的报告记录数据表”或“质量报告记录”时，默认指偏差报告记录，"
+        "应调用 quality.list_deviation_report_records；需要详情时再根据返回记录继续查询相关偏差或同步状态。"
+        "质量模块可查询偏差、CAPA、变更、变更计划、验证、CPV、飞书CAPA台账、飞书验证记录和质量同步冲突；"
+        "质量写入、同步、回拉和提醒只生成确认项，删除、审批通过、驳回、飞书配置和文件导入不开放给助手。"
         "涉及今天、明天、每天几点或设置定时任务时，必须先调用 agent.get_current_time 获取当前北京时间和 cron 时区。"
         "写操作只会生成确认项，用户确认前不得声称已经执行。"
         "发送飞书消息时优先使用 identity.send_feishu_message：低价值、短消息发文本；"
@@ -179,6 +186,122 @@ def _base_url() -> str:
     return os.getenv("DAZAH_API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
 
 
+def _business_scope(context: dict[str, Any]) -> list[str]:
+    default_scope = ["identity", "warehouse", "procurement", "quality"]
+    incoming_scope = context.get("scope")
+    if not isinstance(incoming_scope, list):
+        return default_scope
+
+    merged = list(default_scope)
+    for item in incoming_scope:
+        if isinstance(item, str) and item and item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _quality_report_records_intent(message: str) -> bool:
+    normalized = re.sub(r"\s+", "", message)
+    if not normalized:
+        return False
+    if "偏差报告记录" in normalized or "质量报告记录" in normalized:
+        return True
+    return "质量模块" in normalized and ("报告记录" in normalized or "数据表" in normalized)
+
+
+def _requested_page_size(message: str, default: int = 5) -> int:
+    match = re.search(r"(?:前|最近)\s*(\d{1,2})\s*条", message)
+    if not match:
+        return default
+    return max(1, min(int(match.group(1)), 20))
+
+
+def _short_text(value: Any, limit: int = 120) -> str:
+    if value is None or value == "":
+        return "-"
+    text = str(value).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _tool_envelope_data(raw_result: str) -> dict[str, Any]:
+    payload = json.loads(raw_result)
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "工具返回格式不是对象"}
+    data = payload.get("data")
+    if isinstance(data, dict) and "ok" in data:
+        return data
+    return payload
+
+
+def _format_deviation_report_records(tool_data: dict[str, Any], page_size: int) -> str:
+    if not tool_data.get("ok"):
+        error = tool_data.get("error") or tool_data.get("data") or "质量工具执行失败"
+        return f"质量模块报告记录查询失败：{_short_text(error, 300)}"
+
+    records_data = tool_data.get("data")
+    if not isinstance(records_data, dict):
+        return "质量模块报告记录查询完成，但返回数据格式异常。"
+
+    items = records_data.get("items")
+    if not isinstance(items, list):
+        items = []
+    total = records_data.get("total")
+    shown = min(len(items), page_size)
+
+    lines = [
+        "已通过质量模块工具 quality.list_deviation_report_records 查询偏差报告记录。",
+        f"本次展示：{shown} 条" + (f"，总数：{total} 条" if isinstance(total, int) else ""),
+    ]
+    if not items:
+        lines.append("当前没有查询到偏差报告记录。")
+        return "\n".join(lines)
+
+    for index, item in enumerate(items[:page_size], start=1):
+        if not isinstance(item, dict):
+            continue
+        lines.extend(
+            [
+                f"- 记录 {index}：{_short_text(item.get('deviation_code'))}",
+                f"  - 状态：{_short_text(item.get('report_status'))}",
+                f"  - 报告时间：{_short_text(item.get('report_time'))}",
+                f"  - 部门/报告人：{_short_text(item.get('department'))} / {_short_text(item.get('reporter_name'))}",
+                f"  - 产品批号：{_short_text(item.get('product_batch'))}",
+                f"  - 飞书同步：{_short_text(item.get('feishu_sync_status'))}",
+                f"  - 描述：{_short_text(item.get('description'))}",
+            ]
+        )
+    if isinstance(total, int) and total > shown:
+        lines.append("如需继续查看，可以让我查询后续记录或按偏差编号筛选。")
+    return "\n".join(lines)
+
+
+async def _try_direct_quality_response(payload: DazahChatRequest) -> DazahChatResponse | None:
+    if not _quality_report_records_intent(payload.message):
+        return None
+
+    page_size = _requested_page_size(payload.message)
+    params = {"page": 1, "page_size": page_size}
+    raw_result = await dazah_tool(
+        "quality.list_deviation_report_records",
+        params=params,
+        reason="查询质量模块偏差报告记录",
+    )
+    tool_data = _tool_envelope_data(raw_result)
+    return DazahChatResponse(
+        message=_format_deviation_report_records(tool_data, page_size),
+        pending_confirmations=_collect_confirmations(tool_data, set()),
+        tool_trace=[
+            {
+                "tool": "dazah_tool",
+                "operation": "quality.list_deviation_report_records",
+                "params": params,
+                "ok": bool(tool_data.get("ok")),
+            }
+        ],
+    )
+
+
 async def _check_dazah_llm_proxy() -> str | None:
     token = os.getenv("AGENT_LLM_PROXY_TOKEN", "")
     base_url = os.getenv("DAZAH_LLM_BASE_URL", "http://127.0.0.1:8000/api/v1/agent/llm").rstrip("/")
@@ -204,7 +327,7 @@ async def _resolve_progressive_skills(payload: DazahChatRequest) -> list[dict[st
     request_payload = {
         "message": payload.message,
         "enabled_toolsets": ["agent", "dazah"],
-        "business_scope": payload.context.get("scope") or ["identity", "warehouse", "procurement"],
+        "business_scope": _business_scope(payload.context),
         "available_tools": ["dazah_tool", "memory", "session_search", "todo", "clarify"],
         "limit": 3,
     }
@@ -267,6 +390,10 @@ async def chat(payload: DazahChatRequest, authorization: str | None = Header(def
     _require_token(authorization)
     token = dazah_request_context.set(payload.context)
     try:
+        direct_response = await _try_direct_quality_response(payload)
+        if direct_response is not None:
+            return direct_response
+
         try:
             proxy_error = await _check_dazah_llm_proxy()
             if proxy_error:
@@ -319,6 +446,18 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
                 loop.call_soon_threadsafe(queue.put_nowait, {"event": "delta", "data": {"text": delta}})
 
         try:
+            direct_response = await _try_direct_quality_response(payload)
+            if direct_response is not None:
+                yield _sse_event(
+                    "done",
+                    {
+                        "message": direct_response.message,
+                        "pending_confirmations": direct_response.pending_confirmations,
+                        "tool_trace": direct_response.tool_trace,
+                    },
+                )
+                return
+
             proxy_error = await _check_dazah_llm_proxy()
             if proxy_error:
                 yield _sse_event("error", {"message": f"Livzon Agent 运行异常：{proxy_error}"})

@@ -55,6 +55,74 @@ ALLOWED_OPERATIONS = [
     "procurement.list_contract_templates",
     "procurement.get_contract_template",
     "procurement.generate_contract",
+    "quality.add_capa_execution_track",
+    "quality.auto_fill_capa_from_deviation",
+    "quality.complete_capa_part",
+    "quality.create_capa",
+    "quality.create_change",
+    "quality.create_change_action_plan",
+    "quality.create_cpv_parameter",
+    "quality.create_cpv_product",
+    "quality.create_deviation",
+    "quality.create_validation",
+    "quality.get_capa",
+    "quality.get_capa_statistics",
+    "quality.get_change",
+    "quality.get_change_statistics",
+    "quality.get_cpv_product",
+    "quality.get_cpv_statistics",
+    "quality.get_cpv_trend",
+    "quality.get_deviation",
+    "quality.get_deviation_statistics",
+    "quality.get_feishu_capa_ledger",
+    "quality.get_feishu_capa_plan_track",
+    "quality.get_feishu_validation",
+    "quality.get_next_change_code",
+    "quality.get_related_capas",
+    "quality.get_validation",
+    "quality.get_validation_statistics",
+    "quality.link_capa_deviation",
+    "quality.list_capa_departments",
+    "quality.list_capas",
+    "quality.list_change_action_plans",
+    "quality.list_change_action_plans_by_change",
+    "quality.list_changes",
+    "quality.list_cpv_batches",
+    "quality.list_cpv_cpp_batches",
+    "quality.list_cpv_cqa_batches",
+    "quality.list_cpv_parameters",
+    "quality.list_cpv_products",
+    "quality.list_deviation_report_records",
+    "quality.list_deviations",
+    "quality.list_feishu_capa_ledger",
+    "quality.list_feishu_capa_plan_tracks",
+    "quality.list_feishu_validations",
+    "quality.list_quality_sync_conflicts",
+    "quality.list_validation_executions",
+    "quality.list_validations",
+    "quality.pull_feishu_validations",
+    "quality.pull_quality_records_from_feishu",
+    "quality.resubmit_capa",
+    "quality.resubmit_deviation",
+    "quality.run_change_action_plan_reminders",
+    "quality.send_change_action_plan_reminder",
+    "quality.submit_capa",
+    "quality.submit_deviation",
+    "quality.submit_deviation_investigation",
+    "quality.sync_capa_plan_track_to_feishu",
+    "quality.sync_capa_to_feishu",
+    "quality.sync_change_action_plan",
+    "quality.sync_change_action_plans_from_feishu",
+    "quality.sync_deviation_report_record_to_feishu",
+    "quality.sync_deviation_to_feishu",
+    "quality.update_capa",
+    "quality.update_change",
+    "quality.update_change_action_plan",
+    "quality.update_cpv_parameter",
+    "quality.update_cpv_product",
+    "quality.update_deviation",
+    "quality.update_validation",
+    "quality.update_validation_execution",
     "agent.get_current_time",
     "agent.list_workflow_capabilities",
     "agent.create_workflow",
@@ -156,7 +224,7 @@ async def dazah_tool(
 DAZAH_TOOL_SCHEMA = {
     "name": "dazah_tool",
     "description": (
-        "Call Dazah platform identity, warehouse, and procurement operations through the Agent "
+        "Call Dazah platform identity, warehouse, procurement, and quality operations through the Agent "
         "tool gateway. For full-dataset counts, TopN, distributions, distinct "
         "counts, or grouped statistics, prefer analytics.aggregate instead of "
         "paging through list operations. Read operations execute immediately. "
@@ -171,8 +239,11 @@ DAZAH_TOOL_SCHEMA = {
         "for business messages that need handling, which sends callback interactive "
         "cards. First identify recipients via identity.search_personnel and "
         "summarize recipients, message shape, title/body summary, and whether "
-        "handling buttons are included before user confirmation. Old text/card "
-        "operations are compatibility-only."
+        "handling buttons are included before user confirmation. Quality module "
+        "tools cover deviations, CAPA, change controls, validations, CPV, and "
+        "quality Feishu read/sync operations; deletion, approval/rejection, "
+        "Feishu configuration, and file import operations are intentionally not "
+        "exposed. Old text/card operations are compatibility-only."
     ),
     "parameters": {
         "type": "object",
