@@ -150,9 +150,109 @@ def _build_operation_aliases() -> dict[str, str]:
 
 OPERATION_ALIASES = _build_operation_aliases()
 
+FEISHU_MESSAGE_OPERATIONS = {
+    "identity.send_feishu_message",
+    "identity.send_feishu_text_message",
+    "identity.send_feishu_card_message",
+}
+
+FEISHU_RECIPIENT_ALIASES = (
+    "recipient",
+    "recipients",
+    "recipient_id",
+    "recipient_ids",
+    "recipient_user_id",
+    "recipient_user_ids",
+    "to",
+    "to_user",
+    "to_users",
+    "to_user_id",
+    "to_user_ids",
+    "user_id",
+    "feishu_id",
+    "feishu_user_id",
+    "feishu_user_ids",
+    "feishu_open_id",
+    "feishu_open_ids",
+    "open_id",
+    "open_ids",
+    "employee_no",
+    "employee_nos",
+)
+
+FEISHU_RECIPIENT_OBJECT_KEYS = (
+    "id",
+    "user_id",
+    "feishu_id",
+    "feishu_user_id",
+    "feishu_open_id",
+    "open_id",
+    "employee_no",
+    "name",
+)
+
+FEISHU_TEXT_ALIASES = (
+    "content",
+    "message",
+    "message_content",
+    "body_text",
+)
+
 
 def _normalize_operation(operation: str) -> str:
     return operation if operation in ALLOWED_OPERATIONS else OPERATION_ALIASES.get(operation, operation)
+
+
+def _append_identifier(result: list[str], value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, list):
+        for item in value:
+            _append_identifier(result, item)
+        return
+    if isinstance(value, dict):
+        for key in FEISHU_RECIPIENT_OBJECT_KEYS:
+            nested = value.get(key)
+            if nested:
+                _append_identifier(result, nested)
+                return
+        return
+    text = str(value).strip()
+    if text:
+        result.append(text)
+
+
+def _normalize_feishu_message_body(
+    operation: str,
+    body: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if operation not in FEISHU_MESSAGE_OPERATIONS or body is None:
+        return body
+
+    normalized = dict(body)
+    if not normalized.get("user_ids"):
+        recipient_ids: list[str] = []
+        for key in FEISHU_RECIPIENT_ALIASES:
+            if key in normalized:
+                _append_identifier(recipient_ids, normalized.get(key))
+        if recipient_ids:
+            normalized["user_ids"] = recipient_ids
+
+    if not normalized.get("text"):
+        for key in FEISHU_TEXT_ALIASES:
+            value = normalized.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized["text"] = value.strip()
+                break
+
+    if operation == "identity.send_feishu_card_message" and not normalized.get("markdown"):
+        for key in ("text", *FEISHU_TEXT_ALIASES):
+            value = normalized.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized["markdown"] = value.strip()
+                break
+
+    return normalized
 
 
 def _base_url() -> str:
@@ -190,6 +290,10 @@ async def dazah_tool(
             {"ok": False, "error": "DAZAH_AGENT_TOOL_TOKEN is not configured"},
             ensure_ascii=False,
         )
+
+    if _ignored:
+        body = {**(body or {}), **_ignored}
+    body = _normalize_feishu_message_body(operation, body)
 
     merged_context = {**dazah_request_context.get({}), **(context or {})}
     payload = {
@@ -238,6 +342,9 @@ DAZAH_TOOL_SCHEMA = {
         "value or structured summaries as cards; use requires_business_action=true "
         "for business messages that need handling, which sends callback interactive "
         "cards. First identify recipients via identity.search_personnel and "
+        "put recipient identifiers in body.user_ids and message content in body.text; "
+        "body.user_ids accepts local UUID, Feishu user_id, Feishu open_id, employee_no, "
+        "mobile, email, or name. "
         "summarize recipients, message shape, title/body summary, and whether "
         "handling buttons are included before user confirmation. Quality module "
         "tools cover deviations, CAPA, change controls, validations, CPV, and "
