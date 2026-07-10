@@ -124,6 +124,29 @@ ALLOWED_OPERATIONS = [
     "quality.update_validation",
     "quality.update_validation_execution",
     "agent.get_current_time",
+    "agent.get_my_access_scope",
+    "agent.create_automation_draft",
+    "agent.preview_automation",
+    "agent.confirm_automation",
+    "agent.list_automations",
+    "agent.get_automation",
+    "agent.update_automation",
+    "agent.set_automation_enabled",
+    "agent.archive_automation",
+    "agent.simulate_automation",
+    "agent.list_scheduled_triggers",
+    "agent.list_automation_runs",
+    "agent.get_automation_run",
+      "agent.list_push_deliveries",
+      "agent.get_push_delivery",
+      "agent.list_domain_events",
+      "agent.list_automation_capability_impacts",
+      "agent.complete_manual_task",
+      "agent.get_automation_health",
+      "agent.get_automation_trends",
+      "agent.list_automation_templates",
+      "agent.list_automation_suggestions",
+      "agent.get_operations_report",
     "agent.list_workflow_capabilities",
     "agent.create_workflow",
     "agent.list_workflows",
@@ -337,6 +360,11 @@ DAZAH_TOOL_SCHEMA = {
         "result says it has. Before creating or adjusting daily scheduled tasks, "
         "call agent.get_current_time to get the current Asia/Shanghai time and "
         "cron timezone; do not guess today's date or current time. "
+        "For Livzon automations, first preview the definition against the user's "
+        "effective access scope, then create a draft and wait for the backend "
+        "confirmation before claiming that it is enabled. Use only agent.* "
+        "automation operations to create, inspect, update, pause, archive, or "
+        "trace automations. "
         "For Feishu outbound messages, prefer identity.send_feishu_message. "
         "Use low value short unstructured notifications as text; use medium/high "
         "value or structured summaries as cards; use requires_business_action=true "
