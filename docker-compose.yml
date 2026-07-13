@@ -28,6 +28,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cpus: "${HERMES_CPU_LIMIT:-0.75}"
+    mem_limit: "${HERMES_MEMORY_LIMIT:-1g}"
+    pids_limit: 256
     healthcheck:
       test:
         [
