@@ -16,7 +16,8 @@ custom_providers:
     api_mode: chat_completions
     models:
       dazah-active-text:
-        name: Dazah active text model
+        name: Dazah active capability-routed model
+        supports_vision: true
     model: dazah-active-text
     # The FastAPI adapter passes AGENT_LLM_PROXY_TOKEN explicitly.
     # CLI compatibility may use DAZAH_API_KEY with the same service token.

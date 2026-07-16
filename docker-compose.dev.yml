@@ -14,6 +14,8 @@ services:
       DAZAH_LLM_MODEL: ${DAZAH_LLM_MODEL:-dazah-active-text}
       HERMES_DAZAH_CHAT_TIMEOUT_SECONDS: ${HERMES_DAZAH_CHAT_TIMEOUT_SECONDS:-180}
       HERMES_DAZAH_MAX_TOOL_ITERATIONS: ${HERMES_DAZAH_MAX_TOOL_ITERATIONS:-30}
+      # Poll the Windows bind mount so Uvicorn reload does not miss source changes.
+      WATCHFILES_FORCE_POLLING: "${WATCHFILES_FORCE_POLLING:-true}"
     ports:
       - "${HERMES_PORT:-8100}:8100"
     volumes:
@@ -22,7 +24,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
-    command: python -m uvicorn services.dazah_agent_service:app --host 0.0.0.0 --port 8100 --reload --reload-dir /app
+    command: >
+      python -m uvicorn services.dazah_agent_service:app
+      --host 0.0.0.0 --port 8100
+      --reload --reload-dir /app
+      --reload-include '*.py'
+      --reload-include '*.yaml'
+      --reload-include '*.yml'
     cpus: "${HERMES_DEV_CPU_LIMIT:-1.0}"
     mem_limit: "${HERMES_DEV_MEMORY_LIMIT:-1g}"
     pids_limit: 256
