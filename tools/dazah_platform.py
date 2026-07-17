@@ -133,11 +133,11 @@ ALLOWED_OPERATIONS = [
     "quality.update_validation_execution",
     "agent.get_current_time",
     "agent.get_my_access_scope",
-    "agent.create_automation_draft",
-    "agent.preview_automation",
-    "agent.confirm_automation",
+    "agent.create_automation",
+    "agent.create_scheduled_task",
     "agent.list_automations",
     "agent.get_automation",
+    "agent.run_automation",
     "agent.update_automation",
     "agent.set_automation_enabled",
     "agent.archive_automation",
@@ -156,14 +156,6 @@ ALLOWED_OPERATIONS = [
       "agent.list_automation_templates",
       "agent.list_automation_suggestions",
       "agent.get_operations_report",
-    "agent.list_workflow_capabilities",
-    "agent.create_workflow",
-    "agent.list_workflows",
-    "agent.get_workflow",
-    "agent.set_workflow_enabled",
-    "agent.run_workflow",
-    "agent.cancel_workflow_run",
-    "agent.get_workflow_run",
 ]
 
 
@@ -369,11 +361,20 @@ DAZAH_TOOL_SCHEMA = {
         "result says it has. Before creating or adjusting daily scheduled tasks, "
         "call agent.get_current_time to get the current Asia/Shanghai time and "
         "cron timezone; do not guess today's date or current time. "
-        "For Livzon automations, first preview the definition against the user's "
-        "effective access scope, then create a draft and wait for the backend "
-        "confirmation before claiming that it is enabled. Use only agent.* "
+        "For Livzon task creation, call agent.create_automation when no time "
+        "condition exists, or agent.create_scheduled_task when any date, weekday, "
+        "clock time, interval, or recurrence exists. The backend builds and validates "
+        "the automation definition; never invent low-level nodes or templates. Use agent.* "
+        "For agent.create_scheduled_task, copy the user's complete unabridged request into "
+        "body.requirement. When a scheduled Feishu delivery asks for queried data, a summary, "
+        "statistics, a list, report, or records, body.actions must contain the relevant read "
+        "operation before identity.send_feishu_message. Never replace requested data with a "
+        "fixed greeting or 'please check'; the backend injects each runtime query result into "
+        "the outgoing message. "
         "automation operations to create, inspect, update, pause, archive, or "
-        "trace automations. "
+        "trace automations. The legacy workflow category is removed: when a user "
+        "says 工作流, treat it as an automation, or as a scheduled task if time is present. "
+        "IDs returned by agent.list_automations must use agent.run_automation. "
         "For Feishu outbound messages, prefer identity.send_feishu_message. "
         "Use low value short unstructured notifications as text; use medium/high "
         "value or structured summaries as cards; use requires_business_action=true "

@@ -85,8 +85,16 @@ def _system_prompt(progressive_skills: list[dict[str, Any]] | None = None) -> st
         "涉及今天、明天、每天几点或设置定时任务时，必须先调用 agent.get_current_time 获取当前北京时间和 cron 时区。"
         "用户询问自己可访问哪些模块、可调用哪些工具或权限拒绝原因时，必须调用 agent.get_my_access_scope；"
         "只能解释当前有效范围和申请路径，不能创建、修改或提升用户模块权限。"
-        "用户要求创建、修改、启停或查看 Livzon 自动化时，必须使用 agent.* 自动化工具；"
-        "创建前先调用 agent.preview_automation 校验定义与当前范围，创建草案、确认启用、修改、启停和归档"
+        "Livzon Task 只有自动化流程和定时任务两类，不存在工作流分类。"
+        "自动化流程不得包含时间触发；任何日期、星期、时刻、间隔、周期或重复语义都必须认定为定时任务。"
+        "用户提到工作流时，若不含时间按自动化流程处理，含时间按定时任务处理。"
+        "创建不含时间的流程只能调用 agent.create_automation；创建含时间的任务只能调用 agent.create_scheduled_task。"
+        "这两个工具由后端生成和校验流程定义，不得自行拼装 notify、condition、trigger 等底层节点。"
+        "创建定时任务时必须把用户本轮完整原始需求逐字放入 body.requirement，不得概括或省略。"
+        "若定时飞书消息需要发送查询、汇总、统计、清单、报表或记录，actions 中必须先放对应的查询工具，"
+        "再放 identity.send_feishu_message；不得只发送固定寒暄或‘请查收’。后端会在每次运行时把查询结果"
+        "自动合并进飞书正文，因此不得在创建时伪造查询结果。"
+        "修改、启停、查看或归档 Livzon Task 时使用 agent.* 自动化工具；创建、修改、启停和归档"
         "都是写操作，必须等待后端 confirmation，不能在确认前声称任务已启用或已修改。"
         "用户询问定时任务的未来执行时间时，调用 agent.simulate_automation；该工具只预览 cron、时区和策略，不执行业务动作。"
         "用户询问自己收到的自动化飞书消息或发送状态时，调用 agent.list_push_deliveries 或 agent.get_push_delivery。"
@@ -108,7 +116,8 @@ def _system_prompt(progressive_skills: list[dict[str, Any]] | None = None) -> st
         "调用飞书消息工具时，收件人必须放在 body.user_ids 数组，"
         "可填本地用户UUID、飞书user_id、open_id、工号、手机号、邮箱或姓名；"
         "消息正文必须放在 body.text。"
-        "发送确认前必须展示收件人、消息形态、标题/正文摘要，以及是否包含处理按钮。"
+        "调用发送工具创建待确认项时，必须把收件人、消息形态、标题/正文摘要和处理按钮信息"
+        "完整放入工具参数，供前端确认执行卡片展示；不得先用普通回复询问是否发送。"
         "回答要像业务系统里的卡片式回复，禁止输出 Markdown 表格，禁止使用 |---| 这类表格语法。"
         "每次通过工具返回业务数据时，正文必须说明数据来源 operation、查询时间、关键筛选条件和是否只展示部分结果；"
         "无法从工具结果确认的数据口径必须明确说明，不能推测。"
@@ -155,6 +164,71 @@ def _history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _task_routing_instruction(message: str) -> str:
+    """Add a deterministic route constraint before the model chooses a tool."""
+    normalized = re.sub(r"\s+", "", message)
+    task_words = ("自动化", "自动化流程", "工作流", "定时任务", "计划任务")
+    if not any(word in normalized for word in task_words):
+        return ""
+    time_patterns = (
+        r"定时|计划任务|cron|每天|每日|每周|每月|工作日|周[一二三四五六日天]",
+        r"\d{1,2}[:：点时]\d{0,2}",
+        r"今天|明天|后天|每隔|间隔|重复|周期|分钟后|小时后|天后",
+    )
+    has_time = any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in time_patterns)
+    if has_time:
+        return (
+            "\n\n# 本轮 Livzon Task 强制路由\n"
+            "已由规则识别为定时任务。创建时只能调用 agent.create_scheduled_task，"
+            "不得调用普通自动化创建工具，也不得使用任何 workflow operation。"
+        )
+    return (
+        "\n\n# 本轮 Livzon Task 强制路由\n"
+        "已由规则识别为不含时间的自动化流程。创建时只能调用 agent.create_automation，"
+        "不得添加 schedule 触发器，也不得使用任何 workflow operation。"
+    )
+
+
+def _write_confirmation_routing_instruction(message: str) -> str:
+    """Turn an explicit send command into a tool-call postcondition.
+
+    The confirmation card is already the safety boundary for message writes.
+    Asking the user whether to send before creating that card adds a second,
+    ambiguous confirmation state and can leave the UI with only model prose.
+    """
+    normalized = re.sub(r"\s+", "", message)
+    query_only_markers = (
+        "发送状态",
+        "发送记录",
+        "是否发送成功",
+        "有没有发送",
+        "是否已发送",
+        "查询发送",
+        "查看发送",
+    )
+    if any(marker in normalized for marker in query_only_markers):
+        return ""
+
+    explicit_send_patterns = (
+        r"(?:请|帮我|替我|麻烦|立即|直接|现在).{0,80}(?:发送|推送)",
+        r"(?:向|给|把|将).{0,80}(?:发送|推送)",
+        r"(?:发送|推送)(?:给|至|到)",
+        r"^(?:发送|推送)",
+        r"(?:汇总|整理|生成).{0,80}(?:并|然后|再|后)?(?:发送|推送)",
+    )
+    if not any(re.search(pattern, normalized) for pattern in explicit_send_patterns):
+        return ""
+
+    return (
+        "\n\n# 本轮写操作确认强制路由\n"
+        "规则已识别到用户明确下达了发送或推送指令。确认执行卡片本身就是发送前的二次确认，"
+        "不得再询问‘是否发送’、‘是否确认发送’，也不得在普通回复中伪造确认按钮。"
+        "收件人和消息内容可从本轮需求、会话上下文或本轮查询结果确定时，必须立即调用 "
+        "identity.send_feishu_message 创建后端真实 pending confirmation；"
+        "只有缺少无法推断的收件人或消息内容时，才只追问缺失字段。"
+    )
+
+
 def _user_message_with_attachments(payload: DazahChatRequest) -> str | list[dict[str, Any]]:
     if not payload.attachments:
         return payload.message
@@ -195,7 +269,7 @@ def _looks_like_confirmation(value: Any) -> bool:
         and isinstance(value.get("operation"), str)
         and isinstance(value.get("summary"), str)
         and isinstance(value.get("risk_level"), str)
-        and isinstance(value.get("status"), str)
+        and value.get("status") == "pending"
         and isinstance(value.get("expires_at"), str)
     )
 
@@ -262,15 +336,6 @@ def _business_scope(context: dict[str, Any]) -> list[str]:
         if isinstance(item, str) and item and item not in merged:
             merged.append(item)
     return merged
-
-
-def _quality_report_records_intent(message: str) -> bool:
-    normalized = re.sub(r"\s+", "", message)
-    if not normalized:
-        return False
-    if "偏差报告记录" in normalized or "质量报告记录" in normalized:
-        return True
-    return "质量模块" in normalized and ("报告记录" in normalized or "数据表" in normalized)
 
 
 def _structured_feishu_send_request(message: str) -> dict[str, Any] | None:
@@ -412,6 +477,9 @@ def _verified_agent_message(
     tool_trace: list[dict[str, Any]],
 ) -> str:
     """Reject confirmation/execution claims that have no gateway evidence."""
+    if confirmations:
+        return _normalize_pending_confirmation_message(message)
+
     claim_markers = (
         "已生成确认",
         "已生成待确认",
@@ -420,8 +488,6 @@ def _verified_agent_message(
         "已经执行",
     )
     if not any(marker in message for marker in claim_markers):
-        return message
-    if confirmations:
         return message
     verified_write = any(
         isinstance(item, dict)
@@ -435,11 +501,23 @@ def _verified_agent_message(
     return "没有查询到后端真实确认记录，本次未执行任何操作。请重新提交完整的收件人和消息内容。"
 
 
-def _requested_page_size(message: str, default: int = 5) -> int:
-    match = re.search(r"(?:前|最近)\s*(\d{1,2})\s*条", message)
-    if not match:
-        return default
-    return max(1, min(int(match.group(1)), 20))
+def _normalize_pending_confirmation_message(message: str) -> str:
+    """Remove the redundant yes/no prompt once a real pending item exists."""
+    normalized = re.sub(
+        r"(?:请)?(?:再次)?确认(?:是否|要不要)?(?:发送|推送|执行)[？?。！!]*",
+        "",
+        message,
+    )
+    normalized = re.sub(
+        r"(?:是否|要不要)(?:现在|立即)?(?:发送|推送|执行)[？?。！!]*",
+        "",
+        normalized,
+    )
+    normalized = normalized.strip()
+    instruction = "待确认项已生成，请在下方确认执行卡片中点击“确认执行”。"
+    if "确认执行" in normalized:
+        return normalized
+    return f"{normalized}\n\n{instruction}" if normalized else instruction
 
 
 def _short_text(value: Any, limit: int = 120) -> str:
@@ -459,74 +537,6 @@ def _tool_envelope_data(raw_result: str) -> dict[str, Any]:
     if isinstance(data, dict) and "ok" in data:
         return data
     return payload
-
-
-def _format_deviation_report_records(tool_data: dict[str, Any], page_size: int) -> str:
-    if not tool_data.get("ok"):
-        error = tool_data.get("error") or tool_data.get("data") or "质量工具执行失败"
-        return f"质量模块报告记录查询失败：{_short_text(error, 300)}"
-
-    records_data = tool_data.get("data")
-    if not isinstance(records_data, dict):
-        return "质量模块报告记录查询完成，但返回数据格式异常。"
-
-    items = records_data.get("items")
-    if not isinstance(items, list):
-        items = []
-    total = records_data.get("total")
-    shown = min(len(items), page_size)
-
-    lines = [
-        "已通过质量模块工具 quality.list_deviation_report_records 查询偏差报告记录。",
-        f"本次展示：{shown} 条" + (f"，总数：{total} 条" if isinstance(total, int) else ""),
-    ]
-    if not items:
-        lines.append("当前没有查询到偏差报告记录。")
-        return "\n".join(lines)
-
-    for index, item in enumerate(items[:page_size], start=1):
-        if not isinstance(item, dict):
-            continue
-        lines.extend(
-            [
-                f"- 记录 {index}：{_short_text(item.get('deviation_code'))}",
-                f"  - 状态：{_short_text(item.get('report_status'))}",
-                f"  - 报告时间：{_short_text(item.get('report_time'))}",
-                f"  - 部门/报告人：{_short_text(item.get('department'))} / {_short_text(item.get('reporter_name'))}",
-                f"  - 产品批号：{_short_text(item.get('product_batch'))}",
-                f"  - 飞书同步：{_short_text(item.get('feishu_sync_status'))}",
-                f"  - 描述：{_short_text(item.get('description'))}",
-            ]
-        )
-    if isinstance(total, int) and total > shown:
-        lines.append("如需继续查看，可以让我查询后续记录或按偏差编号筛选。")
-    return "\n".join(lines)
-
-
-async def _try_direct_quality_response(payload: DazahChatRequest) -> DazahChatResponse | None:
-    if not _quality_report_records_intent(payload.message):
-        return None
-
-    page_size = _requested_page_size(payload.message)
-    params = {"page": 1, "page_size": page_size}
-    raw_result = await dazah_tool(
-        "quality.list_deviation_report_records",
-        params=params,
-        reason="查询质量模块偏差报告记录",
-    )
-    tool_data = _tool_envelope_data(raw_result)
-    return DazahChatResponse(
-        message=_format_deviation_report_records(tool_data, page_size),
-        pending_confirmations=_collect_confirmations(tool_data, set()),
-        tool_trace=[
-            {
-                "tool": "dazah_tool",
-                "operation": "quality.list_deviation_report_records",
-                "params": params,
-                "ok": bool(tool_data.get("ok")),
-            }
-        ],
-    )
 
 
 async def _check_dazah_llm_proxy() -> str | None:
@@ -597,7 +607,11 @@ def _run_agent_conversation(
     )
     result = agent.run_conversation(
         _user_message_with_attachments(payload),
-        system_message=_system_prompt(progressive_skills),
+        system_message=(
+            _system_prompt(progressive_skills)
+            + _task_routing_instruction(payload.message)
+            + _write_confirmation_routing_instruction(payload.message)
+        ),
         conversation_history=_history(payload.messages),
         stream_callback=stream_callback,
         persist_user_message=payload.message,
@@ -620,10 +634,6 @@ async def chat(payload: DazahChatRequest, authorization: str | None = Header(def
     token = dazah_request_context.set(payload.context)
     try:
         direct_response = None if payload.attachments else await _try_direct_feishu_send_response(payload)
-        if direct_response is not None:
-            return direct_response
-
-        direct_response = None if payload.attachments else await _try_direct_quality_response(payload)
         if direct_response is not None:
             return direct_response
 
@@ -686,18 +696,6 @@ async def chat_stream(payload: DazahChatRequest, authorization: str | None = Hea
 
         try:
             direct_response = None if payload.attachments else await _try_direct_feishu_send_response(payload)
-            if direct_response is not None:
-                yield _sse_event(
-                    "done",
-                    {
-                        "message": direct_response.message,
-                        "pending_confirmations": direct_response.pending_confirmations,
-                        "tool_trace": direct_response.tool_trace,
-                    },
-                )
-                return
-
-            direct_response = None if payload.attachments else await _try_direct_quality_response(payload)
             if direct_response is not None:
                 yield _sse_event(
                     "done",

@@ -11,3 +11,4 @@ def test_prompt_narrows_human_decision_policy_to_responsibility_actions() -> Non
     assert "点击‘确认执行’" in source
     assert "都不属于高风险拒绝范围" in source
     assert "应调用相应工具生成待确认项" in source
+    assert "供前端确认执行卡片展示；不得先用普通回复询问是否发送" in source
